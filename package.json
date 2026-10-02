@@ -1,0 +1,7 @@
+{
+  "name": "ugphone-mod-daily-key",
+  "version": "1.0.0",
+  "private": true,
+  "description": "UGPHONE MOD shared daily-key/admin system",
+  "scripts": {"start": "node server.js"}
+}
