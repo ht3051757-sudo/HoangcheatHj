@@ -64,3 +64,10 @@ Set `ADMIN_KEY` in the Render Environment Variables. The key is intentionally no
 Khi mở frontend trên GitHub Pages, app tự hiện hộp **Kết nối Backend** nếu chưa có URL Render. Nhập `https://TEN-SERVICE.onrender.com/api` một lần. URL được lưu trong localStorage.
 Giới hạn đăng ký: tối đa 150 tài khoản.
 Admin login chấp nhận `ADMIN_PASSWORD` hoặc `ADMIN_KEY` trên Render.
+
+
+## Single-origin deployment
+
+Bản này không dùng GitHub Pages làm frontend riêng. Node/Express phục vụ luôn `index.html`, CSS, JS và `/api` trên cùng một origin, nên không có popup nhập URL Render và không cần `UG_API_URL` trỏ sang domain khác.
+
+Deploy toàn bộ thư mục `ug` lên một Node host (Render/Railway/VPS/etc.), đặt `DATABASE_URL`, `ADMIN_KEY` và các biến môi trường cần thiết, rồi mở chính URL của service đó.
