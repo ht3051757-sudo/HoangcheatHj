@@ -10,6 +10,7 @@ function ensureApiUrl(){
  return true;
 }
 async function fetchJSON(url,opts={}){
+ if(!ensureApiUrl()) throw new Error("Chưa cấu hình URL backend Render.");
  try{
   const r=await fetch(url,opts);
   const type=r.headers.get("content-type")||"";
