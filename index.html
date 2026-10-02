@@ -1,94 +1,43 @@
 <!doctype html>
 <html lang="vi">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#06030d">
-<title>UGPHONE MOD • Daily Key</title>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#06030d"><title>UGPHONE MOD • Daily Key</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <canvas id="particles"></canvas><div class="aurora a1"></div><div class="aurora a2"></div><div class="noise"></div>
-<header>
-  <div class="brand">UGPHONE MOD</div>
-  <nav>
-    <button onclick="show('home')">TRANG CHỦ</button>
-    <button onclick="show('auth')">TÀI KHOẢN</button>
-    <button onclick="show('admin')">ADMIN</button>
-    <button onclick="show('chat')">CHAT</button>
-  </nav>
-</header>
+<header><div class="brand">UGPHONE MOD</div><nav>
+<button onclick="show('home')">TRANG CHỦ</button><button onclick="show('auth')">TÀI KHOẢN</button>
+<button onclick="show('admin')">ADMIN</button><button onclick="show('chat')">CHAT</button>
+</nav></header>
 <main>
-<section id="home" class="page active">
-  <div class="hero reveal">
-    <div class="badge">✦ DAILY KEY SYSTEM</div>
-    <h1>UGPHONE MOD</h1>
-    <p>NHẬN KEY UGPHONE MOD MỖI NGÀY</p>
-    <div class="live"><span></span> <b id="onlineCount">0</b> người đang hoạt động</div>
-    <div class="actions">
-      <button class="primary magnetic" onclick="claimKey()">⚡ NHẬN KEY UGPHONE MOD HÔM NAY</button>
-      <button onclick="show('auth')">ĐĂNG KÝ / ĐĂNG NHẬP</button>
-    </div>
-    <div id="keyBox" class="keybox hidden"></div>
-  </div>
-</section>
+<section id="home" class="page active"><div class="hero reveal">
+<div class="badge">✦ SHARED ONLINE SYSTEM</div><h1>UGPHONE MOD</h1><p>NHẬN KEY UGPHONE MOD MỖI NGÀY</p>
+<div class="live"><span></span> <b id="onlineCount">0</b> người đang hoạt động</div>
+<div class="actions"><button class="primary magnetic" onclick="claimKey()">⚡ NHẬN KEY UGPHONE MOD HÔM NAY</button>
+<button onclick="show('auth')">ĐĂNG KÝ / ĐĂNG NHẬP</button></div><div id="keyBox" class="keybox hidden"></div>
+<div id="stats" class="muted"></div></div></section>
 
-<section id="auth" class="page"><div class="card">
-  <h2>Tài khoản</h2>
-  <input id="username" placeholder="Tên tài khoản" autocomplete="username">
-  <input id="password" type="password" placeholder="Mật khẩu" autocomplete="current-password">
-  <div class="row">
-    <button class="primary" onclick="register()">TẠO TÀI KHOẢN</button>
-    <button onclick="login()">ĐĂNG NHẬP</button>
-  </div>
-  <p id="authMsg"></p>
-  <div id="profileBox" class="profileBox hidden">
-    <h3>Ảnh đại diện</h3>
-    <img id="avatarPreview" class="avatarLarge" alt="Avatar">
-    <input id="avatarFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onchange="previewAvatar(event)">
-    <button class="primary" onclick="saveAvatar()">LƯU AVATAR</button>
-    <button onclick="removeAvatar()">XÓA AVATAR</button>
-  </div>
+<section id="auth" class="page"><div class="card"><h2>Tài khoản</h2>
+<input id="username" placeholder="Tên tài khoản" autocomplete="username">
+<input id="password" type="password" placeholder="Mật khẩu" autocomplete="current-password">
+<div class="row"><button class="primary" onclick="register()">TẠO TÀI KHOẢN</button><button onclick="login()">ĐĂNG NHẬP</button><button onclick="logout()">ĐĂNG XUẤT</button></div>
+<p id="authMsg"></p><div id="profileBox" class="profileBox"></div></div></section>
+
+<section id="chat" class="page"><div class="card chatCard"><div class="chatHead">
+<div><h2>💬 CHAT UGPHONE MOD</h2><small>Phòng chat chung — mọi máy dùng chung</small></div><span id="chatStatus">● Kết nối</span></div>
+<div id="chatMessages" class="chatMessages"></div><div class="chatInput"><input id="chatInput" maxlength="500" placeholder="Nhập tin nhắn..." onkeydown="if(event.key==='Enter')sendChat()"><button class="primary" onclick="sendChat()">GỬI</button></div>
+<small class="chatHint">Bạn cần đăng nhập để chat.</small></div></section>
+
+<section id="admin" class="page"><div class="card adminCard"><h2>UGPHONE MOD <span class="adminTag">ADMIN</span></h2>
+<div id="adminLogin"><p>Đăng nhập khu vực quản trị.</p><input id="adminPass" type="password" placeholder="Mật khẩu Admin"><button class="primary" onclick="adminLogin()">VÀO ADMIN</button></div>
+<div id="adminPanel" class="hidden"><button onclick="adminLogout()">ĐĂNG XUẤT ADMIN</button>
+<div class="stats"><div><b id="statUsers">0</b><small>Tài khoản</small></div><div><b id="statOnline">0</b><small>Đang hoạt động</small></div>
+<div><b id="statBanned">0</b><small>Đã BAN</small></div><div><b id="statKeys">0</b><small>KEY</small></div></div><hr>
+<h3>🔑 Thêm KEY UGPHONE MOD</h3><div class="keyForm"><input id="newKey" placeholder="Ví dụ: UGPHONE-MOD-001"><input id="keyDate" type="date"><input id="keyLimit" type="number" min="1" placeholder="Số lượt">
+<button class="primary" onclick="addKey()">THÊM KEY</button></div><div id="keyList"></div><hr>
+<h3>💬 Chat gần đây</h3><div id="adminChat"></div><hr><h3>👥 Tài khoản / hoạt động</h3><div id="users"></div></div>
 </div></section>
-
-<section id="chat" class="page">
-  <div class="card chatCard">
-    <div class="chatHead"><div><h2>💬 CHAT UGPHONE MOD</h2><small>Phòng chat chung</small></div><span id="chatStatus">● Kết nối</span></div>
-    <div id="chatMessages" class="chatMessages"></div>
-    <div class="chatInput"><input id="chatText" maxlength="500" placeholder="Nhập tin nhắn..." onkeydown="if(event.key==='Enter')sendMessage()"><button class="primary" onclick="sendMessage()">GỬI</button></div>
-    <small class="chatHint">Bạn cần đăng nhập tài khoản để chat.</small>
-  </div>
-</section>
-
-<section id="admin" class="page"><div class="card adminCard">
-  <h2>UGPHONE MOD <span class="adminTag">ADMIN</span></h2>
-  <div id="adminLogin">
-    <p>Đăng nhập khu vực quản trị.</p>
-    <input id="adminPass" type="password" placeholder="Mật khẩu Admin">
-    <button class="primary" onclick="adminLogin()">VÀO ADMIN</button>
-  </div>
-  <div id="adminPanel" class="hidden">
-    <div class="stats">
-      <div><b id="statUsers">0</b><small>Tài khoản</small></div>
-      <div><b id="statOnline">0</b><small>Đang hoạt động</small></div>
-      <div><b id="statBanned">0</b><small>Đã BAN</small></div>
-      <div><b id="statKeys">0</b><small>KEY</small></div>
-    </div>
-    <hr>
-    <h3>🔑 Thêm KEY UGPHONE MOD</h3>
-    <div class="keyForm">
-      <input id="newKey" placeholder="Ví dụ: UGPHONE-MOD-001">
-      <input id="keyDate" type="date">
-      <input id="keyLimit" type="number" min="1" placeholder="Số lượt">
-      <button class="primary" onclick="addKey()">THÊM KEY</button>
-    </div>
-    <div id="keyList"></div>
-    <hr>
-    <h3>💬 Chat gần đây</h3><div id="adminChat"></div><hr><h3>👥 Tài khoản / hoạt động</h3>
-    <div id="users"></div>
-  </div>
-</div></section>
-</main>
-<div id="toast"></div>
-<script src="app.js"></script>
+</main><div id="toast"></div><script src="app.js"></script>
 </body></html>

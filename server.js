@@ -1,158 +1,101 @@
-const http=require("http"),fs=require("fs"),path=require("path"),crypto=require("crypto"),url=require("url");
-const PORT=Number(process.env.PORT||3000);
-const ADMIN_PASSWORD=String(process.env.ADMIN_PASSWORD||"admin123");
-const DATA_DIR=path.join(__dirname,"data"),DB_FILE=path.join(DATA_DIR,"db.json");
-fs.mkdirSync(DATA_DIR,{recursive:true});
-const empty={users:[],keys:[],bannedIPs:[],messages:[]};
-function load(){
-  try{
-    const d=JSON.parse(fs.readFileSync(DB_FILE,"utf8"));
-    d.users ||= []; d.keys ||= []; d.bannedIPs ||= []; d.messages ||= [];
-    return d;
-  }catch{
-    fs.writeFileSync(DB_FILE,JSON.stringify(empty,null,2));
-    return JSON.parse(JSON.stringify(empty));
-  }
-}
-let db=load();
-function save(){fs.writeFileSync(DB_FILE,JSON.stringify(db,null,2))}
-function send(res,status,data){let body=JSON.stringify(data);res.writeHead(status,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store","Access-Control-Allow-Origin":"*"});res.end(body)}
-function hash(s){return crypto.createHash("sha256").update(s).digest("hex")}
-function readBody(req){return new Promise((resolve,reject)=>{let b="";req.on("data",c=>{b+=c;if(b.length>1e6)req.destroy()});req.on("end",()=>{try{resolve(b?JSON.parse(b):{})}catch{reject(new Error("JSON không hợp lệ"))}})})}
+const express=require("express");
+const cors=require("cors");
+const bcrypt=require("bcryptjs");
+const crypto=require("crypto");
+const postgres=require("postgres");
+
+const app=express();
+app.set("trust proxy",true);
+app.use(express.json({limit:"1mb"}));
+const allowed=(process.env.ALLOWED_ORIGIN||"*").split(",").map(x=>x.trim()).filter(Boolean);
+app.use(cors({origin:(origin,cb)=>{if(!origin||allowed.includes("*")||allowed.includes(origin))return cb(null,true);cb(new Error("Origin not allowed"))},credentials:false}));
+
+const sql=postgres(process.env.DATABASE_URL||"",{prepare:false,max:5});
+const PORT=Number(process.env.PORT||10000);
+const SESSION_DAYS=30;
+const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD||"";
+
+function now(){return new Date()}
+function ip(req){return String(req.ip||req.headers["x-forwarded-for"]||req.socket.remoteAddress||"unknown").split(",")[0].trim().replace(/^::ffff:/,"")}
+function todayVN(){return new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Ho_Chi_Minh"}).format(new Date())}
 function token(){return crypto.randomBytes(32).toString("hex")}
-const adminTokens=new Map();
-function authAdmin(req){let h=req.headers.authorization||"";let t=h.startsWith("Bearer ")?h.slice(7):"";let exp=adminTokens.get(t);if(!exp)return false;if(exp<=Date.now()){adminTokens.delete(t);return false}return true}
-function validName(s){return typeof s==="string"&&/^[A-Za-z0-9_.-]{3,32}$/.test(s)}
-function online(u){return u.lastSeen&&Date.now()-u.lastSeen<90000}
+function fail(res,code,msg){return res.status(code).json({error:msg})}
+async function init(){
+ await sql`create table if not exists users(
+  id uuid primary key default gen_random_uuid(), username text unique not null, password_hash text not null,
+  banned boolean not null default false, ip text, avatar text not null default '', created_at timestamptz not null default now(), last_seen timestamptz not null default now())`;
+ await sql`create table if not exists keys(
+  id uuid primary key default gen_random_uuid(), key text not null, date date not null, limit_count integer not null default 999999,
+  used integer not null default 0, active boolean not null default true, created_at timestamptz not null default now())`;
+ await sql`create table if not exists banned_ips(ip text primary key, created_at timestamptz not null default now())`;
+ await sql`create table if not exists messages(
+  id bigserial primary key, user_id uuid references users(id) on delete set null, username text not null, avatar text not null default '',
+  message text not null, created_at timestamptz not null default now())`;
+ await sql`create table if not exists sessions(
+  token text primary key, user_id uuid references users(id) on delete cascade, is_admin boolean not null default false,
+  expires_at timestamptz not null)`;
+ await sql`create index if not exists messages_created_idx on messages(created_at desc)`;
+}
 
-function normalizeIP(ip){
-  if(!ip) return "";
-  if(ip.startsWith("::ffff:")) return ip.slice(7);
-  return ip;
+async function auth(req,res,next){
+ const t=(req.headers.authorization||"").replace(/^Bearer\s+/i,"");if(!t)return fail(res,401,"Bạn chưa đăng nhập.");
+ const rows=await sql`select s.token,s.is_admin,s.user_id,u.username,u.banned,u.avatar,u.ip from sessions s left join users u on u.id=s.user_id where s.token=${t} and s.expires_at>now() limit 1`;
+ if(!rows.length)return fail(res,401,"Phiên đăng nhập hết hạn.");
+ req.session=rows[0];if(!rows[0].is_admin&&rows[0].banned)return fail(res,403,"Tài khoản đã bị BAN.");
+ if(!rows[0].is_admin&&await sql`select 1 from banned_ips where ip=${rows[0].ip} limit 1`.then(r=>r.length))return fail(res,403,"Thiết bị đã bị BAN IP.");
+ next();
 }
-function requestIP(req){
-  // Use the direct socket IP. Do not trust X-Forwarded-For unless the
-  // application is behind a configured/trusted reverse proxy.
-  return normalizeIP(req.socket.remoteAddress||"");
+async function adminAuth(req,res,next){
+ const t=(req.headers.authorization||"").replace(/^Bearer\s+/i,"");if(!t)return fail(res,401,"Chưa đăng nhập Admin.");
+ const rows=await sql`select token from sessions where token=${t} and is_admin=true and expires_at>now() limit 1`;
+ if(!rows.length)return fail(res,401,"Phiên Admin hết hạn.");req.adminToken=t;next();
 }
-function isIPBanned(ip){ return !!ip && db.bannedIPs.includes(ip); }
 
-async function handler(req,res){
-  let u=url.parse(req.url,true),p=u.pathname;
-  if(req.method==="OPTIONS"){res.writeHead(204,{"Access-Control-Allow-Origin":"*","Access-Control-Allow-Headers":"Content-Type, Authorization","Access-Control-Allow-Methods":"GET,POST,PATCH,DELETE,OPTIONS"});return res.end()}
-  if(req.method==="GET" && p==="/api/stats")return send(res,200,{users:db.users.length,online:db.users.filter(x=>!x.banned&&online(x)).length,banned:db.users.filter(x=>x.banned).length,keys:db.keys.length,bannedIPs:db.bannedIPs.length});
-  try{
-    if(req.method==="POST"&&p==="/api/register"){
-      let b=await readBody(req),ip=requestIP(req); if(isIPBanned(ip))return send(res,403,{error:"IP của thiết bị đã bị BAN."});if(!validName(b.username)||typeof b.password!=="string"||b.password.length<4||b.password.length>128)return send(res,400,{error:"Tên tài khoản 3-32 ký tự; mật khẩu 4-128 ký tự."});
-      if(db.users.some(x=>x.username.toLowerCase()===b.username.toLowerCase()))return send(res,409,{error:"Tên tài khoản đã tồn tại."});
-      db.users.push({username:b.username,passwordHash:hash(b.password),banned:false,ip,avatar:"",createdAt:Date.now(),lastSeen:Date.now()});save();
-      return send(res,201,{username:b.username});
-    }
-    if(req.method==="POST"&&p==="/api/login"){
-      let b=await readBody(req),ip=requestIP(req),name=String(b.username||"").trim(),x=db.users.find(x=>x.username.toLowerCase()===name.toLowerCase()); if(isIPBanned(ip))return send(res,403,{error:"IP của thiết bị đã bị BAN."});
-      if(!x||x.passwordHash!==hash(String(b.password||"")))return send(res,401,{error:"Sai tài khoản hoặc mật khẩu."});
-      if(x.banned)return send(res,403,{error:"Tài khoản của bạn đã bị BAN!"});
-      x.lastSeen=Date.now();x.ip=ip;save();return send(res,200,{username:x.username,avatar:x.avatar||""});
-    }
-    if(req.method==="POST"&&p==="/api/presence"){
-      let b=await readBody(req),ip=requestIP(req),name=String(b.username||"").trim(),x=db.users.find(x=>x.username.toLowerCase()===name.toLowerCase()); if(isIPBanned(ip))return send(res,403,{error:"IP của thiết bị đã bị BAN."});
-      if(!x||x.banned)return send(res,403,{error:"Tài khoản không hợp lệ hoặc đã bị BAN."});
-      x.lastSeen=Date.now();x.ip=ip;save();return send(res,200,{ok:true});
-    }
-    if(req.method==="POST"&&p==="/api/claim-key"){
-      let b=await readBody(req),ip=requestIP(req),x=db.users.find(x=>x.username===b.username); if(isIPBanned(ip))return send(res,403,{error:"IP của thiết bị đã bị BAN."});
-      if(!x||x.banned)return send(res,403,{error:"Tài khoản không hợp lệ hoặc đã bị BAN."});
-      x.lastSeen=Date.now();x.ip=ip;
-      let today=new Date().toISOString().slice(0,10),k=db.keys.find(k=>k.date===today&&k.active&&k.used<k.limit);
-      if(!k)return send(res,404,{error:"Hôm nay chưa có KEY hoặc KEY đã hết lượt."});
-      k.used++;k.claimedBy=(k.claimedBy||[]);k.claimedBy.push({username:x.username,at:Date.now()});save();
-      return send(res,200,{key:k.key});
-    }
-    if(req.method==="GET"&&p==="/api/profile"){
-      let username=String(u.query.username||""),x=db.users.find(x=>x.username===username);
-      if(!x)return send(res,404,{error:"Không tìm thấy tài khoản."});
-      return send(res,200,{username:x.username,avatar:x.avatar||""});
-    }
-    if(req.method==="POST"&&p==="/api/profile/avatar"){
-      let b=await readBody(req),ip=requestIP(req),x=db.users.find(x=>x.username===b.username);
-      if(isIPBanned(ip))return send(res,403,{error:"IP của thiết bị đã bị BAN."});
-      if(!x||x.banned)return send(res,403,{error:"Tài khoản không hợp lệ hoặc đã bị BAN."});
-      let avatar=String(b.avatar||"");
-      // Accept browser-selected images encoded as data URLs.
-      if(avatar && !/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=\s]+$/i.test(avatar))
-        return send(res,400,{error:"Ảnh avatar không hợp lệ."});
-      if(avatar.length>1_500_000)return send(res,413,{error:"Ảnh quá lớn. Hãy chọn ảnh nhỏ hơn."});
-      x.avatar=avatar;x.lastSeen=Date.now();x.ip=ip;save();
-      return send(res,200,{username:x.username,avatar:x.avatar});
-    }
-    if(req.method==="GET"&&p==="/api/messages"){
-      let q=u.query||{},since=Math.max(0,Number(q.since)||0);
-      let msgs=db.messages.filter(m=>m.id>since).slice(-200);
-      return send(res,200,{messages:msgs,nextId:db.messages.length?db.messages[db.messages.length-1].id:0});
-    }
-    if(req.method==="POST"&&p==="/api/messages"){
-      let b=await readBody(req),ip=requestIP(req),x=db.users.find(x=>x.username===b.username);
-      if(isIPBanned(ip))return send(res,403,{error:"IP của thiết bị đã bị BAN."});
-      if(!x||x.banned)return send(res,403,{error:"Tài khoản không hợp lệ hoặc đã bị BAN."});
-      let msg=String(b.message||"").trim();
-      if(!msg)return send(res,400,{error:"Tin nhắn trống."});
-      if(msg.length>500)return send(res,400,{error:"Tin nhắn tối đa 500 ký tự."});
-      x.lastSeen=Date.now();x.ip=ip;
-      let item={id:(db.messages.length?db.messages[db.messages.length-1].id:0)+1,username:x.username,avatar:x.avatar||"",message:msg,at:Date.now()};
-      db.messages.push(item);db.messages=db.messages.slice(-1000);save();
-      return send(res,201,item);
-    }
-    if(req.method==="POST"&&p==="/api/admin/login"){
-      let b=await readBody(req);if(String(b.password||"")!==ADMIN_PASSWORD)return send(res,401,{error:"Sai mật khẩu Admin"});
-      let t=token();adminTokens.set(t,Date.now()+86400000);return send(res,200,{token:t});
-    }
-    if(p.startsWith("/api/admin/")){
-      if(!authAdmin(req))return send(res,401,{error:"Phiên Admin không hợp lệ hoặc đã hết hạn."});
-      if(req.method==="GET"&&p==="/api/admin/messages")return send(res,200,{messages:db.messages.slice(-500)});
-            if(req.method==="GET"&&p==="/api/admin/stats")return send(res,200,{users:db.users.length,online:db.users.filter(x=>!x.banned&&online(x)).length,banned:db.users.filter(x=>x.banned).length,keys:db.keys.length,bannedIPs:db.bannedIPs.length});
-      if(req.method==="GET"&&p==="/api/admin/users")return send(res,200,{users:db.users.map(x=>({username:x.username,banned:x.banned,ip:x.ip||"",avatar:x.avatar||"",createdAt:x.createdAt,lastSeen:x.lastSeen}))});
-      if(req.method==="GET"&&p==="/api/admin/keys")return send(res,200,{keys:db.keys});
-      if(req.method==="POST"&&p==="/api/admin/keys"){
-        let b=await readBody(req),key=String(b.key||"").trim(),date=String(b.date||""),limit=Math.max(1,Number(b.limit)||1);
-        if(!key||!/^\d{4}-\d{2}-\d{2}$/.test(date))return send(res,400,{error:"KEY và ngày không hợp lệ."});
-        if(db.keys.some(x=>x.key===key))return send(res,409,{error:"KEY đã tồn tại."});
-        db.keys.push({id:crypto.randomUUID(),key,date,limit,used:0,active:true,createdAt:Date.now(),claimedBy:[]});save();return send(res,201,{ok:true});
-      }
-      if(req.method==="PATCH"&&p.startsWith("/api/admin/keys/")){
-        let id=decodeURIComponent(p.split("/").pop()),b=await readBody(req),k=db.keys.find(x=>x.id===id);if(!k)return send(res,404,{error:"Không tìm thấy KEY."});
-        if(typeof b.active==="boolean")k.active=b.active;save();return send(res,200,{ok:true});
-      }
-      if(req.method==="POST"&&p==="/api/admin/ip-ban"){
-        let b=await readBody(req),ip=normalizeIP(String(b.ip||"").trim());
-        if(!ip)return send(res,400,{error:"IP không hợp lệ."});
-        if(!db.bannedIPs.includes(ip))db.bannedIPs.push(ip);
-        save();return send(res,200,{ok:true,ip});
-      }
-      if(req.method==="DELETE"&&p.startsWith("/api/admin/ip-ban/")){
-        let ip=decodeURIComponent(p.split("/").pop());
-        db.bannedIPs=db.bannedIPs.filter(x=>x!==ip);save();return send(res,200,{ok:true});
-      }
-      if(req.method==="GET"&&p==="/api/admin/ip-bans")return send(res,200,{ips:db.bannedIPs});
-      if(req.method==="PATCH"&&p.startsWith("/api/admin/users/")){
-        let username=decodeURIComponent(p.split("/").pop()),b=await readBody(req),x=db.users.find(x=>x.username===username);if(!x)return send(res,404,{error:"Không tìm thấy tài khoản."});
-        if(typeof b.banned==="boolean")x.banned=b.banned;save();return send(res,200,{ok:true});
-      }
-    }
-    send(res,404,{error:"Không tìm thấy API."});
-  }catch(e){console.error(e);send(res,500,{error:"Lỗi máy chủ."})}
-}
-const mime={".html":"text/html; charset=utf-8",".js":"text/javascript; charset=utf-8",".css":"text/css; charset=utf-8"};
-const WEB_ROOT=__dirname;
-http.createServer((req,res)=>{
-  if(req.url.startsWith("/api/"))return handler(req,res);
-  let pathname=decodeURIComponent(url.parse(req.url).pathname);
-  if(pathname==="/")pathname="/index.html";
-  const root=path.resolve(WEB_ROOT);
-  const f=path.resolve(WEB_ROOT,"."+pathname);
-  if(f!==root && !f.startsWith(root+path.sep))return send(res,403,{error:"Forbidden"});
-  fs.readFile(f,(e,d)=>{
-    if(e)return send(res,404,{error:"Not found"});
-    res.writeHead(200,{"Content-Type":mime[path.extname(f)]||"application/octet-stream"});
-    res.end(d);
-  });
-}).listen(PORT,()=>console.log(`UGPHONE MOD running on http://localhost:${PORT}`));
+app.get("/api/health",(req,res)=>res.json({ok:true,service:"UGPHONE MOD shared backend",time:Date.now()}));
+
+app.post("/api/register",async(req,res)=>{
+ try{const username=String(req.body.username||"").trim(),password=String(req.body.password||"");
+ if(!/^[A-Za-z0-9_.-]{3,32}$/.test(username))return fail(res,400,"Tên tài khoản 3-32 ký tự, chỉ chữ, số, _, -, .");
+ if(password.length<6)return fail(res,400,"Mật khẩu phải có ít nhất 6 ký tự.");
+ const exists=await sql`select 1 from users where lower(username)=lower(${username}) limit 1`;if(exists.length)return fail(res,409,"Tài khoản đã tồn tại.");
+ const hash=await bcrypt.hash(password,12),rows=await sql`insert into users(username,password_hash,ip) values(${username},${hash},${ip(req)}) returning id,username,banned,avatar,ip`;
+ const t=token();await sql`insert into sessions(token,user_id,is_admin,expires_at) values(${t},${rows[0].id},false,now()+${SESSION_DAYS+" days"}::interval)`;
+ res.json({token:t,user:rows[0]});
+ }catch(e){console.error(e);fail(res,500,"Lỗi máy chủ khi tạo tài khoản.")}});
+
+app.post("/api/login",async(req,res)=>{
+ try{const username=String(req.body.username||"").trim(),password=String(req.body.password||"");const rows=await sql`select * from users where lower(username)=lower(${username}) limit 1`;
+ if(!rows.length||!(await bcrypt.compare(password,rows[0].password_hash)))return fail(res,401,"Sai tài khoản hoặc mật khẩu.");
+ const u=rows[0];if(u.banned)return fail(res,403,"Tài khoản đã bị BAN.");if((await sql`select 1 from banned_ips where ip=${ip(req)} limit 1`).length)return fail(res,403,"Thiết bị đã bị BAN IP.");
+ await sql`update users set ip=${ip(req)},last_seen=now() where id=${u.id}`;const t=token();await sql`insert into sessions(token,user_id,expires_at) values(${t},${u.id},now()+${SESSION_DAYS+" days"}::interval)`;
+ res.json({token:t,user:{id:u.id,username:u.username,banned:u.banned,avatar:u.avatar,ip:ip(req)}});
+ }catch(e){console.error(e);fail(res,500,"Lỗi máy chủ khi đăng nhập.")}});
+
+app.post("/api/logout",auth,async(req,res)=>{await sql`delete from sessions where token=${req.headers.authorization.replace(/^Bearer\s+/i,"")}`;res.json({ok:true})});
+app.get("/api/me",auth,async(req,res)=>{await sql`update users set last_seen=now() where id=${req.session.user_id}`;res.json({user:{id:req.session.user_id,username:req.session.username,avatar:req.session.avatar,ip:req.session.ip,banned:req.session.banned}})});
+app.get("/api/stats",async(req,res)=>{const u=await sql`select count(*)::int n from users`;const o=await sql`select count(*)::int n from users where last_seen>now()-interval '90 seconds' and banned=false`;const k=await sql`select count(*)::int n from keys`;res.json({users:u[0].n,online:o[0].n,keys:k[0].n})});
+
+app.post("/api/keys/claim",auth,async(req,res)=>{
+ try{await sql.begin(async tx=>{const d=todayVN();const rows=await tx`select * from keys where date=${d} and active=true and used<limit_count order by created_at asc limit 1 for update skip locked`;if(!rows.length)throw Object.assign(new Error("Hôm nay chưa có KEY."),{status:404});const k=rows[0];await tx`update keys set used=used+1 where id=${k.id}`;res.json({key:k.key,remaining:k.limit_count-k.used-1})})}catch(e){fail(res,e.status||500,e.status?e.message:"Lỗi máy chủ khi nhận KEY.")}});
+
+app.get("/api/chat",auth,async(req,res)=>{const rows=await sql`select id,username,avatar,message,created_at from messages order by created_at desc limit 100`;res.json({messages:rows.reverse()})});
+app.post("/api/chat",auth,async(req,res)=>{const message=String(req.body.message||"").trim();if(!message)return fail(res,400,"Tin nhắn trống.");if(message.length>500)return fail(res,400,"Tin nhắn tối đa 500 ký tự.");const r=await sql`insert into messages(user_id,username,avatar,message) values(${req.session.user_id},${req.session.username},${req.session.avatar||""},${message}) returning id,username,avatar,message,created_at`;await sql`delete from messages where id not in (select id from messages order by id desc limit 500)`;res.json({message:r[0]})});
+app.post("/api/profile/avatar",auth,async(req,res)=>{const avatar=String(req.body.avatar||"");if(avatar.length>700000)return fail(res,400,"Ảnh quá lớn.");if(avatar&&!/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(avatar))return fail(res,400,"Ảnh không hợp lệ.");const r=await sql`update users set avatar=${avatar} where id=${req.session.user_id} returning id,username,banned,avatar,ip`;res.json({user:r[0]})});
+
+app.post("/api/admin/login",async(req,res)=>{if(!ADMIN_PASSWORD)return fail(res,503,"Admin chưa được cấu hình ADMIN_PASSWORD trên server.");if(String(req.body.password||"")!==ADMIN_PASSWORD)return fail(res,401,"Sai mật khẩu Admin.");const t=token();await sql`insert into sessions(token,is_admin,expires_at) values(${t},true,now()+${SESSION_DAYS+" days"}::interval)`;res.json({token:t})});
+app.post("/api/admin/logout",adminAuth,async(req,res)=>{await sql`delete from sessions where token=${req.adminToken}`;res.json({ok:true})});
+app.get("/api/admin/state",adminAuth,async(req,res)=>{
+ const users=await sql`select id,username,banned,ip,avatar,created_at,last_seen from users order by created_at desc`;
+ const keys=await sql`select id,key,date,limit_count as "limit",used,active,created_at from keys order by date desc,created_at desc`;
+ const messages=await sql`select id,username,avatar,message,created_at from messages order by created_at desc limit 100`;
+ const online=users.filter(u=>new Date(u.last_seen).getTime()>Date.now()-90000&&!u.banned).length;
+ res.json({users,keys,messages:messages.reverse(),stats:{users:users.length,online,banned:users.filter(u=>u.banned).length,keys:keys.length}});
+});
+app.post("/api/admin/keys",adminAuth,async(req,res)=>{const key=String(req.body.key||"").trim(),date=String(req.body.date||todayVN()),limit=Math.max(1,Number(req.body.limit||999999));if(!key)return fail(res,400,"Nhập KEY.");const r=await sql`insert into keys(key,date,limit_count) values(${key},${date},${limit}) returning id,key,date,limit_count as "limit",used,active`;res.json({key:r[0]})});
+app.patch("/api/admin/keys/:id",adminAuth,async(req,res)=>{const r=await sql`update keys set active=not active where id=${req.params.id} returning id,active`;if(!r.length)return fail(res,404,"Không tìm thấy KEY.");res.json(r[0])});
+app.patch("/api/admin/users/:id/ban",adminAuth,async(req,res)=>{const r=await sql`update users set banned=not banned where id=${req.params.id} returning id,username,banned`;if(!r.length)return fail(res,404,"Không tìm thấy tài khoản.");res.json(r[0])});
+app.post("/api/admin/ips/ban",adminAuth,async(req,res)=>{const x=String(req.body.ip||"").trim();if(!x)return fail(res,400,"Thiếu IP.");await sql`insert into banned_ips(ip) values(${x}) on conflict do nothing`;res.json({ok:true})});
+app.post("/api/admin/ips/unban",adminAuth,async(req,res)=>{const x=String(req.body.ip||"").trim();await sql`delete from banned_ips where ip=${x}`;res.json({ok:true})});
+
+app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:"Lỗi máy chủ."})});
+init().then(()=>app.listen(PORT,"0.0.0.0",()=>console.log("UGPHONE MOD backend listening on "+PORT))).catch(e=>{console.error("DB init failed",e);process.exit(1)});

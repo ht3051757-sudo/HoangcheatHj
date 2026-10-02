@@ -1,7 +1,9 @@
 {
-  "name": "ugphone-mod-daily-key",
-  "version": "1.0.0",
-  "private": true,
-  "description": "UGPHONE MOD shared daily-key/admin system",
-  "scripts": {"start": "node server.js"}
+  "name":"ugphone-mod-shared",
+  "version":"2.0.0",
+  "private":true,
+  "type":"commonjs",
+  "scripts":{"start":"node server.js"},
+  "engines":{"node":">=20"},
+  "dependencies":{"bcryptjs":"^3.0.2","cors":"^2.8.5","express":"^5.1.0","postgres":"^3.4.7"}
 }

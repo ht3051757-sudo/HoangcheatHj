@@ -1,139 +1,39 @@
-const API="/api";
+/* UGPHONE MOD - shared online frontend */
+const API_URL=(window.UG_API_URL||"https://YOUR-UGPHONE-BACKEND.onrender.com/api").replace(/\/$/,"");
 const $=id=>document.getElementById(id);
-const state={chatId:0,avatar:localStorage.getItem("ug_avatar")||"",token:localStorage.getItem("ug_admin_token")||"",user:localStorage.getItem("ug_user")||""};
+let token=localStorage.getItem("ug_token")||"";
+let me=null,adminToken=localStorage.getItem("ug_admin_token")||"";
+let poller=null;
 
-function show(id){document.querySelectorAll(".page").forEach(x=>x.classList.remove("active"));$(id).classList.add("active");if(id==="admin")renderAdmin()}
-function toast(t){let x=$("toast");x.textContent=t;x.style.display="block";clearTimeout(window.tt);window.tt=setTimeout(()=>x.style.display="none",2300)}
-async function api(path,opts={}){let headers={"Content-Type":"application/json",...(opts.headers||{})};if(state.token)headers.Authorization="Bearer "+state.token;let r=await fetch(API+path,{...opts,headers});let text=await r.text();let d;try{d=text?JSON.parse(text):{}}catch{throw new Error(`Máy chủ không trả JSON (HTTP ${r.status}). Hãy mở website bằng http://... và chạy node server.js.`)}if(!r.ok)throw new Error(d.error||`Lỗi máy chủ (HTTP ${r.status})`);return d}
+function toast(t){const x=$("toast");if(!x)return;x.textContent=t;x.style.display="block";clearTimeout(window.__toast);window.__toast=setTimeout(()=>x.style.display="none",2500)}
+function msg(t){if($("authMsg"))$("authMsg").textContent=t}
+function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
+function api(path,opts={}){const h=new Headers(opts.headers||{});h.set("Content-Type","application/json");if(token)h.set("Authorization","Bearer "+token);return fetch(API_URL+path,{...opts,headers:h}).then(async r=>{let d={};try{d=await r.json()}catch{}if(!r.ok)throw new Error(d.error||"Phản hồi không hợp lệ");return d})}
+function adminApi(path,opts={}){const h=new Headers(opts.headers||{});h.set("Content-Type","application/json");if(adminToken)h.set("Authorization","Bearer "+adminToken);return fetch(API_URL+path,{...opts,headers:h}).then(async r=>{let d={};try{d=await r.json()}catch{}if(!r.ok)throw new Error(d.error||"Phản hồi không hợp lệ");return d})}
 
-function setAuthMsg(t){$("authMsg").textContent=t}
-
-async function register(){
-  let u=$("username").value.trim(),p=$("password").value;
-  if(!u||!p)return setAuthMsg("Nhập đủ thông tin.");
-  try{let d=await api("/register",{method:"POST",body:JSON.stringify({username:u,password:p})});
-    state.user=d.username;state.avatar=d.avatar||"";localStorage.setItem("ug_user",d.username);localStorage.setItem("ug_avatar",state.avatar);setAuthMsg("Tạo tài khoản thành công.");toast("Tài khoản đã được tạo");refreshAll();
-  }catch(e){setAuthMsg(e.message)}
-}
-async function login(){
-  let u=$("username").value.trim(),p=$("password").value;
-  if(!u||!p)return setAuthMsg("Nhập đủ thông tin.");
-  try{let d=await api("/login",{method:"POST",body:JSON.stringify({username:u,password:p})});
-    state.user=d.username;state.avatar=d.avatar||"";localStorage.setItem("ug_user",d.username);localStorage.setItem("ug_avatar",state.avatar);setAuthMsg("Đăng nhập thành công.");toast("Xin chào "+u);refreshAll();
-  }catch(e){setAuthMsg(e.message)}
-}
-async function touch(){if(!state.user)return;try{await api("/presence",{method:"POST",body:JSON.stringify({username:state.user})})}catch{}}
-async function refreshStats(){
-  try{let d=await api("/stats");$("onlineCount").textContent=d.online;$("statOnline").textContent=d.online}
-  catch{$("onlineCount").textContent="0"}
-}
-async function claimKey(){
-  if(!state.user){show("auth");return}
-  try{await touch();let d=await api("/claim-key",{method:"POST",body:JSON.stringify({username:state.user})});
-    $("keyBox").textContent=d.key;$("keyBox").classList.remove("hidden");
-    navigator.clipboard?.writeText(d.key).catch(()=>{});toast("KEY hôm nay đã được cấp • đã copy");renderAdmin();
-  }catch(e){toast(e.message)}
-}
-async function adminLogin(){
-  let password=$("adminPass").value;
-  try{let d=await api("/admin/login",{method:"POST",body:JSON.stringify({password})});
-    state.token=d.token;localStorage.setItem("ug_admin_token",d.token);renderAdmin();toast("Đăng nhập Admin thành công");
-  }catch(e){toast(e.message)}
-}
-async function addKey(){
-  if(!state.token)return toast("Cần đăng nhập Admin");
-  let key=$("newKey").value.trim(),date=$("keyDate").value,limit=Math.max(1,Number($("keyLimit").value)||1);
-  if(!key||!date)return toast("Nhập KEY và ngày");
-  try{await api("/admin/keys",{method:"POST",body:JSON.stringify({key,date,limit})});
-    $("newKey").value="";$("keyLimit").value="";renderAdmin();toast("Đã thêm KEY UGPHONE MOD");
-  }catch(e){toast(e.message)}
-}
-async function toggleKey(id,active){try{await api("/admin/keys/"+encodeURIComponent(id),{method:"PATCH",body:JSON.stringify({active:!active})});renderAdmin()}catch(e){toast(e.message)}}
-async function toggleBan(username,banned){
-  try{await api("/admin/users/"+encodeURIComponent(username),{method:"PATCH",body:JSON.stringify({banned:!banned})});renderAdmin()}
-  catch(e){toast(e.message)}
-}
-function fmt(t){return t?new Date(t).toLocaleString("vi-VN"):"—"}
-async function renderAdmin(){
-  let ok=!!state.token;
-  $("adminLogin").classList.toggle("hidden",ok);$("adminPanel").classList.toggle("hidden",!ok);
-  if(!ok)return;
-  try{
-    let [s,u,k]=await Promise.all([api("/admin/stats"),api("/admin/users"),api("/admin/keys")]);
-    $("statUsers").textContent=s.users;$("statOnline").textContent=s.online;$("statBanned").textContent=s.banned;$("statKeys").textContent=s.keys;
-    $("users").innerHTML=u.users.length?u.users.map(x=>`<div class="user"><span class="userIdentity"><img class="avatarSmall" src="${x.avatar||defaultAvatar()}" alt=""><span><b>${esc(x.username)}</b> ${x.banned?"— <b>ĐÃ BAN</b>":""}<br><small>Tạo: ${fmt(x.createdAt)} • Hoạt động cuối: ${fmt(x.lastSeen)}</small></span><button class="${x.banned?"":"ban"}" onclick="toggleBan(decodeURIComponent('${encodeURIComponent(x.username).replace(/'/g,'%27')}'),${x.banned})">${x.banned?"GỠ BAN":"BAN"}</button></div>`).join(""):"Chưa có tài khoản.";
-    renderAdminChat();
-    $("keyList").innerHTML=k.keys.length?k.keys.map(x=>`<div class="keyitem"><div><b>${esc(x.key)}</b><br><small>${x.date} • ${x.used}/${x.limit} lượt • ${x.active?"ĐANG BẬT":"TẮT"}</small></div><button onclick="toggleKey(decodeURIComponent('${encodeURIComponent(x.id)}'),${x.active})">${x.active?"TẮT":"BẬT"}</button></div>`).join(""):"Chưa có KEY.";
-  }catch(e){if(/Admin|token|hết hạn/i.test(e.message)){state.token="";localStorage.removeItem("ug_admin_token")}toast(e.message)}
-}
-function esc(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
-
-let chatTimer=null;
-function defaultAvatar(){return "data:image/svg+xml;charset=UTF-8,"+encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' rx='32' fill='#171122'/><circle cx='32' cy='25' r='11' fill='#9d7cff'/><path d='M13 56c3-14 35-14 38 0' fill='#9d7cff'/></svg>")}
-function chatScroll(){let box=$("chatMessages");if(box)box.scrollTop=box.scrollHeight}
-function renderChat(msgs,admin=false){
-  let box=$(admin?"adminChat":"chatMessages"); if(!box)return;
-  box.innerHTML=msgs.map(m=>`<div class="chatMsg"><img class="avatar" src="${m.avatar||defaultAvatar()}" alt=""><div class="chatBody"><div><b>${esc(m.username)}</b><small>${fmt(m.at)}</small></div><p>${esc(m.message)}</p></div></div>`).join("");
-  if(!admin)chatScroll();
-}
-
-function showProfile(){
-  $("profileBox")?.classList.toggle("hidden",!state.user);
-  if(state.avatar){$("avatarPreview").src=state.avatar;$("avatarPreview").classList.remove("hidden")}
-  else $("avatarPreview").classList.add("hidden");
-}
-function previewAvatar(ev){
-  let f=ev.target.files?.[0];if(!f)return;
-  if(f.size>1000000)return toast("Ảnh tối đa 1 MB.");
-  if(!/^image\/(png|jpeg|webp|gif)$/.test(f.type))return toast("Chỉ nhận PNG/JPG/WebP/GIF.");
-  let r=new FileReader();r.onload=()=>{$("avatarPreview").src=r.result;$("avatarPreview").classList.remove("hidden");$("avatarPreview").dataset.pending=r.result};r.readAsDataURL(f);
-}
-async function saveAvatar(){
-  if(!state.user)return show("auth");
-  let avatar=$("avatarPreview").dataset.pending;if(!avatar)return toast("Hãy chọn ảnh trước.");
-  try{
-    let d=await api("/profile/avatar",{method:"POST",body:JSON.stringify({username:state.user,avatar})});
-    state.avatar=d.avatar;localStorage.setItem("ug_avatar",state.avatar);$("avatarPreview").dataset.pending="";renderChat(await api("/messages?since=0").then(x=>x.messages||[]));toast("Đã đổi avatar");
-  }catch(e){toast(e.message)}
-}
-async function removeAvatar(){
-  if(!state.user)return;
-  try{
-    let d=await api("/profile/avatar",{method:"POST",body:JSON.stringify({username:state.user,avatar:""})});
-    state.avatar="";localStorage.removeItem("ug_avatar");$("avatarPreview").classList.add("hidden");$("avatarPreview").dataset.pending="";toast("Đã xóa avatar");
-  }catch(e){toast(e.message)}
-}
-
-async function loadChat(){
-  if(!state.user)return;
-  try{
-    let d=await api("/messages?since="+state.chatId);
-    if(d.messages?.length){
-      let box=$("chatMessages"), old=box?box.innerHTML:"";
-      d.messages.forEach(m=>{state.chatId=Math.max(state.chatId,m.id);});
-      let all=await api("/messages?since=0");
-      renderChat(all.messages||[]);
-    }
-    if($("chatStatus"))$("chatStatus").textContent="● Kết nối";
-  }catch(e){if($("chatStatus"))$("chatStatus").textContent="● Mất kết nối"}
-}
-async function sendMessage(){
-  if(!state.user){show("auth");return}
-  let inp=$("chatText"),msg=inp.value.trim();if(!msg)return;
-  try{await api("/messages",{method:"POST",body:JSON.stringify({username:state.user,message:msg})});inp.value="";await loadChat()}
-  catch(e){toast(e.message)}
-}
-async function renderAdminChat(){
-  if(!state.token)return;
-  try{let d=await api("/admin/messages");renderChat(d.messages||[],true)}
-  catch(e){}
-}
-
-async function refreshAll(){touch();showProfile();refreshStats();if($("admin").classList.contains("active"))renderAdmin()}
-setInterval(refreshAll,15000);setInterval(loadChat,2500);refreshAll();loadChat();
-
-const c=$("particles"),ctx=c.getContext("2d",{alpha:true});let W,H,DPR,pts=[],last=0,frames=0,lastAdjust=performance.now();
-function resize(){DPR=Math.min(devicePixelRatio||1,1.5);W=innerWidth;H=innerHeight;c.width=W*DPR;c.height=H*DPR;c.style.width=W+"px";c.style.height=H+"px";ctx.setTransform(DPR,0,0,DPR,0,0);resetPts()}
-function resetPts(){let n=Math.min(85,Math.max(28,Math.round(W*H/12000)));pts=Array.from({length:n},()=>({x:Math.random()*W,y:Math.random()*H,vx:(Math.random()-.5)*.22,vy:(Math.random()-.5)*.22,r:.5+Math.random()*1.4,a:.15+Math.random()*.4}))}
-function frame(t){let dt=Math.min(32,t-last||16);last=t;ctx.clearRect(0,0,W,H);for(const p of pts){p.x+=p.vx*dt;p.y+=p.vy*dt;if(p.x<0)p.x=W;if(p.x>W)p.x=0;if(p.y<0)p.y=H;if(p.y>H)p.y=0;ctx.globalAlpha=p.a;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fillStyle="#b98cff";ctx.fill()}ctx.globalAlpha=1;frames++;if(t-lastAdjust>1500){let f=frames*1000/(t-lastAdjust);if(f<45&&pts.length>28)pts.length=Math.max(28,pts.length-10);else if(f>57&&pts.length<85)pts.length=Math.min(85,pts.length+5);frames=0;lastAdjust=t}requestAnimationFrame(frame)}
-addEventListener("resize",resize,{passive:true});resize();requestAnimationFrame(frame);
+function show(id){document.querySelectorAll(".page").forEach(x=>x.classList.remove("active"));const el=$(id);if(el)el.classList.add("active");if(id==="chat")loadChat();if(id==="admin")loadAdmin();if(id==="auth")renderProfile()}
+function validName(s){return /^[A-Za-z0-9_.-]{3,32}$/.test(s)}
+function register(){const u=$("username")?.value.trim(),p=$("password")?.value||"";if(!validName(u))return msg("Tên tài khoản 3-32 ký tự, chỉ dùng chữ, số, _, -, .");if(p.length<6)return msg("Mật khẩu phải có ít nhất 6 ký tự.");api("/register",{method:"POST",body:JSON.stringify({username:u,password:p})}).then(d=>{token=d.token;localStorage.setItem("ug_token",token);me=d.user;msg("Tạo tài khoản thành công.");toast("Đã tạo tài khoản");refreshAll()}).catch(e=>msg(e.message))}
+function login(){const u=$("username")?.value.trim(),p=$("password")?.value||"";api("/login",{method:"POST",body:JSON.stringify({username:u,password:p})}).then(d=>{token=d.token;localStorage.setItem("ug_token",token);me=d.user;msg("Đăng nhập thành công.");toast("Đã đăng nhập");refreshAll()}).catch(e=>msg(e.message))}
+function logout(){if(!token)return;api("/logout",{method:"POST"}).catch(()=>{}).finally(()=>{token="";me=null;localStorage.removeItem("ug_token");renderProfile();toast("Đã đăng xuất");refreshAll()})}
+async function loadMe(){if(!token){me=null;return}try{me=(await api("/me")).user}catch{token="";localStorage.removeItem("ug_token");me=null}}
+async function claimKey(){if(!me)return toast("Bạn cần đăng nhập.");try{const d=await api("/keys/claim",{method:"POST"});$("keyBox").textContent=d.key;$("keyBox").classList.remove("hidden");navigator.clipboard?.writeText(d.key).catch(()=>{});toast("Đã nhận KEY hôm nay");refreshStats()}catch(e){toast(e.message)}}
+function renderProfile(){const box=$("profileBox");if(!box)return;if(!me){box.innerHTML="<p>Chưa đăng nhập.</p>";return}box.innerHTML=`${me.avatar?`<img class="avatarLarge" src="${esc(me.avatar)}">`:""}<p><b>${esc(me.username)}</b></p><input id="avatarFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><button class="primary" onclick="saveAvatar()">LƯU AVATAR</button><button onclick="removeAvatar()">XÓA AVATAR</button>`}
+async function saveAvatar(){const f=$("avatarFile")?.files?.[0];if(!f)return toast("Chọn ảnh trước.");if(f.size>512*1024)return toast("Ảnh tối đa 512 KB.");if(!/^image\/(png|jpeg|webp|gif)$/.test(f.type))return toast("Chỉ PNG, JPG, WebP hoặc GIF.");const r=new FileReader();r.onload=async()=>{try{const d=await api("/profile/avatar",{method:"POST",body:JSON.stringify({avatar:r.result})});me=d.user;renderProfile();toast("Đã đổi avatar")}catch(e){toast(e.message)}};r.readAsDataURL(f)}
+async function removeAvatar(){try{const d=await api("/profile/avatar",{method:"POST",body:JSON.stringify({avatar:""})});me=d.user;renderProfile();toast("Đã xóa avatar")}catch(e){toast(e.message)}}
+async function loadChat(){try{const d=await api("/chat");const box=$("chatMessages");box.innerHTML=d.messages.map(m=>`<div class="chatMsg">${m.avatar?`<img class="avatar" src="${esc(m.avatar)}">`:"<div class=\"avatar\">U</div>"}<div class="chatBody"><b>${esc(m.username)}</b><div>${esc(m.message)}</div></div></div>`).join("");box.scrollTop=box.scrollHeight}catch(e){toast(e.message)}}
+async function sendChat(){const input=$("chatInput"),text=(input?.value||"").trim();if(!me)return toast("Đăng nhập để chat.");if(!text)return;if(text.length>500)return toast("Tin nhắn tối đa 500 ký tự.");try{await api("/chat",{method:"POST",body:JSON.stringify({message:text})});input.value="";loadChat()}catch(e){toast(e.message)}}
+async function refreshStats(){try{const d=await api("/stats");$("onlineCount").textContent=d.online;const s=$("stats");if(s)s.textContent=`Tài khoản: ${d.users} • Online: ${d.online} • KEY: ${d.keys}`}catch{}}
+async function adminLogin(){const p=$("adminPass")?.value||"";try{const d=await fetch(API_URL+"/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:p})});const j=await d.json();if(!d.ok)throw new Error(j.error||"Sai mật khẩu Admin.");adminToken=j.token;localStorage.setItem("ug_admin_token",adminToken);toast("Đăng nhập Admin thành công");loadAdmin()}catch(e){toast(e.message)}}
+async function adminLogout(){try{await adminApi("/admin/logout",{method:"POST"})}catch{}adminToken="";localStorage.removeItem("ug_admin_token");loadAdmin()}
+async function loadAdmin(){const loginBox=$("adminLogin"),panel=$("adminPanel");if(!loginBox||!panel)return;if(!adminToken){loginBox.classList.remove("hidden");panel.classList.add("hidden");return}try{const d=await adminApi("/admin/state");loginBox.classList.add("hidden");panel.classList.remove("hidden");$("statUsers").textContent=d.stats.users;$("statOnline").textContent=d.stats.online;$("statBanned").textContent=d.stats.banned;$("statKeys").textContent=d.stats.keys;renderKeys(d.keys);renderUsers(d.users);$("adminChat").innerHTML=d.messages.map(m=>`<div class="chatMsg">${m.avatar?`<img class="avatar" src="${esc(m.avatar)}">`:""}<div><b>${esc(m.username)}</b>: ${esc(m.message)}</div></div>`).join("")}catch(e){adminToken="";localStorage.removeItem("ug_admin_token");loginBox.classList.remove("hidden");panel.classList.add("hidden");toast(e.message)}}
+function renderKeys(keys){$("keyList").innerHTML=keys.map(k=>`<div class="keyitem"><span>${esc(k.date)} — <b>${esc(k.key)}</b> — ${k.used}/${k.limit} — ${k.active?"BẬT":"TẮT"}</span><button onclick="toggleKey('${esc(k.id)}')">${k.active?"TẮT":"BẬT"}</button></div>`).join("")}
+function renderUsers(users){$("users").innerHTML=users.map(u=>`<div class="user ${u.banned?"ban":""}"><span><b>${esc(u.username)}</b> — ${u.banned?"BAN":"OK"} — IP: ${esc(u.ip||"")}</span><div class="adminBtns"><button onclick="banUser('${esc(u.id)}')">${u.banned?"GỠ BAN":"BAN"}</button><button class="ipban" onclick="banIP('${encodeURIComponent(u.ip||"")}')">BAN IP</button></div></div>`).join("")}
+async function addKey(){const key=$("newKey")?.value.trim(),date=$("keyDate")?.value,limit=Number($("keyLimit")?.value||999999);if(!key)return toast("Nhập KEY.");try{await adminApi("/admin/keys",{method:"POST",body:JSON.stringify({key,date,limit})});$("newKey").value="";loadAdmin();toast("Đã thêm KEY — tất cả máy sẽ thấy")}catch(e){toast(e.message)}}
+async function toggleKey(id){try{await adminApi("/admin/keys/"+encodeURIComponent(id),{method:"PATCH",body:JSON.stringify({toggle:true})});loadAdmin()}catch(e){toast(e.message)}}
+async function banUser(id){try{await adminApi("/admin/users/"+encodeURIComponent(id)+"/ban",{method:"PATCH"});loadAdmin()}catch(e){toast(e.message)}}
+async function banIP(ip){try{await adminApi("/admin/ips/ban",{method:"POST",body:JSON.stringify({ip:decodeURIComponent(ip)})});loadAdmin()}catch(e){toast(e.message)}}
+async function refreshAll(){await loadMe();renderProfile();await refreshStats();if($("chat").classList.contains("active"))await loadChat();if($("admin").classList.contains("active"))await loadAdmin()}
+setInterval(()=>{refreshStats();if($("chat")?.classList.contains("active"))loadChat()},10000);
+window.register=register;window.login=login;window.logout=logout;window.show=show;window.claimKey=claimKey;window.saveAvatar=saveAvatar;window.removeAvatar=removeAvatar;window.sendChat=sendChat;window.adminLogin=adminLogin;window.adminLogout=adminLogout;window.addKey=addKey;window.toggleKey=toggleKey;window.banUser=banUser;window.banIP=banIP;
+$("keyDate").value=new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Ho_Chi_Minh"});refreshAll();

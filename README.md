@@ -1,84 +1,75 @@
-# UGPHONE MOD — Daily Key System
+# UGPHONE MOD — SHARED ONLINE
 
-Bản này đã sửa lỗi dữ liệu chỉ nằm trên `localStorage`.
+Bản này **không dùng localStorage làm database** nữa.
 
-## Đã thay đổi
+- GitHub Pages: chạy `index.html`, `style.css`, `app.js`.
+- Render: chạy `server.js` làm API backend.
+- Supabase: cung cấp PostgreSQL để lưu tài khoản, KEY, chat, ban.
+- Vì dữ liệu nằm trên database online, Admin thêm KEY trên máy A thì máy B/C cũng thấy.
 
-- Đổi thương hiệu giao diện từ **AURA** thành **UGPHONE MOD**.
-- Nút chính thành **NHẬN KEY UGPHONE MOD HÔM NAY**.
-- Tài khoản được lưu ở server, nên máy A tạo tài khoản thì máy B vào Admin cũng thấy.
-- KEY được lưu ở server, nên Admin thêm KEY trên một máy thì máy khác dùng cùng website cũng thấy.
-- Hoạt động online được cập nhật theo heartbeat 15 giây và Admin xem được `Hoạt động cuối`.
-- BAN/GỠ BAN và trạng thái KEY được đồng bộ qua server.
-- Mật khẩu tài khoản không còn lưu plaintext trong trình duyệt; server lưu SHA-256 hash.
-- Admin token có thời hạn 24 giờ.
-- Dữ liệu demo nằm trong `data/db.json`.
+## 1) Tạo database Supabase
 
-## Chạy
+Tạo một project Supabase mới, vào phần **Connect** và lấy PostgreSQL connection string. Supabase hướng dẫn lấy connection string từ Connect; với backend Node chạy lâu dài có thể dùng kết nối PostgreSQL phù hợp. 
 
-Cần Node.js 18+.
+Bạn không cần tạo bảng thủ công: `server.js` tự tạo các bảng khi khởi động lần đầu.
 
-Linux/macOS:
-```bash
-export ADMIN_PASSWORD='mat-khau-admin-rat-manh'
-npm start
-```
+## 2) Đưa backend lên Render
 
-Windows PowerShell:
-```powershell
-$env:ADMIN_PASSWORD="mat-khau-admin-rat-manh"
-npm start
-```
+Đưa `server.js` và `package.json` lên một repo GitHub (có thể dùng repo riêng, không bắt buộc chung repo Pages).
 
-Mở:
-`http://localhost:3000`
+Trên Render chọn **New → Web Service**.
+- Language: Node
+- Build Command: `npm install`
+- Start Command: `npm start`
 
-## Cho máy khác truy cập
+Render Web Service chạy được Express/Node và phải bind port `0.0.0.0`; code này đã làm sẵn. 
 
-Server phải chạy trên máy/server có IP mà các máy khác truy cập được, ví dụ:
-`http://IP-MAY-CHAY-SERVER:3000`
+### Environment Variables trên Render
 
-Không dùng `localhost` trên máy client khác.
+Thêm:
 
-## Lưu ý production
+`DATABASE_URL` = PostgreSQL connection string lấy từ Supabase
 
-Đây là bản backend nhỏ gọn để thay thế demo localStorage. Nếu public Internet, nên đặt sau HTTPS/reverse proxy, dùng database thật, rate-limit login/API, session store bền vững và secret quản lý bằng environment/secret manager. Không commit mật khẩu Admin vào Git.
+`ADMIN_PASSWORD` = `UGP!H0ANG#2026$MOD`
 
+`ALLOWED_ORIGIN` = `https://ht3051757-sudo.github.io`
 
-## BAN IP
+Sau khi lưu biến môi trường, Render deploy lại service. Không đưa `DATABASE_URL` hoặc mật khẩu Admin vào file JavaScript frontend. Render hỗ trợ lưu secret bằng Environment Variables. 
 
-Trong Admin, mỗi tài khoản có hai nút:
+Sau deploy bạn sẽ có URL kiểu:
 
-- **BAN**: chỉ khóa tài khoản đó.
-- **BAN IP**: thêm IP của thiết bị vào danh sách cấm. Mọi tài khoản đăng nhập/đăng ký/heartbeat/nhận KEY từ IP đó sẽ bị chặn.
+`https://ten-service-cua-ban.onrender.com`
 
-Admin có thể **GỠ BAN IP** trong danh sách IP đã ban.
+Test:
 
-IP được lấy từ kết nối TCP trực tiếp (`req.socket.remoteAddress`). Nếu triển khai sau Nginx/Cloudflare/reverse proxy, cần cấu hình trusted proxy trước khi dùng `X-Forwarded-For`; bản này cố ý không tin header đó mặc định để tránh client tự giả mạo IP.
+`https://ten-service-cua-ban.onrender.com/api/health`
 
+Nếu trả JSON có `"ok":true` là backend chạy.
 
-## Chat
+## 3) Nối GitHub Pages với backend
 
-Đã thêm phòng **CHAT UGPHONE MOD** dùng chung backend:
+Mở `app.js`, dòng đầu có:
 
-- Người dùng đăng nhập mới gửi được tin nhắn.
-- Tin nhắn được lưu trên server, nên các máy khác cùng hệ thống thấy được.
-- Tối đa 500 ký tự/tin nhắn.
-- Admin xem được chat gần đây trong bảng quản trị.
-- Polling 2.5 giây để cập nhật tin nhắn mà không cần WebSocket.
-- IP BAN cũng áp dụng cho chat.
+`const API_URL=(window.UG_API_URL||"https://YOUR-UGPHONE-BACKEND.onrender.com/api")...`
 
+Thay `https://YOUR-UGPHONE-BACKEND.onrender.com/api` bằng URL Render thật của bạn, ví dụ:
 
-## Avatar
+`https://ugphone-mod-backend.onrender.com/api`
 
-- Vào **TÀI KHOẢN** sau khi đăng nhập.
-- Chọn ảnh trực tiếp từ thiết bị bằng nút chọn file.
-- Hỗ trợ PNG/JPG/WebP/GIF, tối đa 1 MB ở giao diện.
-- Avatar được lưu trên server cùng tài khoản và hiển thị trong chat/Admin.
+Sau đó upload/commit các file frontend vào repo GitHub Pages.
 
+## 4) Kiểm tra
 
-## Mật khẩu Admin mặc định
+1. Máy A đăng ký tài khoản.
+2. Admin đăng nhập.
+3. Admin thêm KEY.
+4. Máy B mở lại trang → KEY đó được đọc từ database chung.
+5. Máy A/B đăng nhập tài khoản khác nhau → vẫn dùng chung danh sách KEY.
+6. Chat cũng là chat chung.
+7. BAN user/IP được lưu server.
 
-Nếu chưa đặt biến môi trường `ADMIN_PASSWORD`, mật khẩu Admin mặc định là `admin123`. Có thể đổi bằng biến môi trường `ADMIN_PASSWORD`.
+## Lưu ý quan trọng
 
-**Không mở `index.html` trực tiếp bằng file://.** Hãy chạy `npm start` rồi mở `http://localhost:3000`.
+GitHub Pages một mình **không thể** làm phần database/server. Bản cũ dùng `localStorage`, nên mỗi máy có dữ liệu riêng. Bản này đã tách backend để giải quyết đúng vấn đề đó.
+
+Mật khẩu Admin hiện được đọc từ biến `ADMIN_PASSWORD` trên Render, không hardcode trong `app.js`. Hãy giữ `DATABASE_URL` và các secret trong Environment Variables, không commit chúng vào GitHub.
