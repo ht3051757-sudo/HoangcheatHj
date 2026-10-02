@@ -1,75 +1,45 @@
-# UGPHONE MOD — SHARED ONLINE
+# UGPHONE MOD — Auth + Global Broadcast
 
-Bản này **không dùng localStorage làm database** nữa.
+## Deploy chắc chắn nhất
 
-- GitHub Pages: chạy `index.html`, `style.css`, `app.js`.
-- Render: chạy `server.js` làm API backend.
-- Supabase: cung cấp PostgreSQL để lưu tài khoản, KEY, chat, ban.
-- Vì dữ liệu nằm trên database online, Admin thêm KEY trên máy A thì máy B/C cũng thấy.
+### Cách 1: Deploy toàn bộ thư mục `ug/` lên Render
+- Build/Install: `npm install`
+- Start: `npm start`
+- Environment:
+  - `DATABASE_URL` = PostgreSQL connection string
+  - `ADMIN_PASSWORD` = mật khẩu admin
+  - `ALLOWED_ORIGIN` có thể để trống khi frontend và backend cùng domain
+- Sau khi chạy, mở chính URL Render. Frontend sẽ tự dùng `/api`.
 
-## 1) Tạo database Supabase
+### Cách 2: GitHub Pages frontend + Render backend
+Trong `config.js` đặt:
+`window.UG_API_URL = "https://TEN-SERVICE.onrender.com/api";`
+Và Render đặt:
+`ALLOWED_ORIGIN=https://TEN-USERNAME.github.io`
 
-Tạo một project Supabase mới, vào phần **Connect** và lấy PostgreSQL connection string. Supabase hướng dẫn lấy connection string từ Connect; với backend Node chạy lâu dài có thể dùng kết nối PostgreSQL phù hợp. 
+## Kiểm tra
+Mở `/api/health`. Kết quả thành công phải có:
+`{"ok":true,"database":"ok",...}`
 
-Bạn không cần tạo bảng thủ công: `server.js` tự tạo các bảng khi khởi động lần đầu.
+Đăng ký tạo tài khoản và đăng nhập dùng bcrypt + PostgreSQL.
+Ban tài khoản theo user ID không tự ban tài khoản khác; ban IP là cơ chế riêng.
+Admin broadcast được lưu vào `messages` và phát realtime qua WebSocket `/ws`.
 
-## 2) Đưa backend lên Render
 
-Đưa `server.js` và `package.json` lên một repo GitHub (có thể dùng repo riêng, không bắt buộc chung repo Pages).
+## Server maintenance controls
 
-Trên Render chọn **New → Web Service**.
-- Language: Node
-- Build Command: `npm install`
-- Start Command: `npm start`
+Admin panel can set:
+- `🔩 Đóng server` → `maintenance`
+- `♻️ Đang reset server` → `resetting`
+- `🌙 Server đang nghỉ` → `resting`
+- `▶️ Mở server` → `normal`
 
-Render Web Service chạy được Express/Node và phải bind port `0.0.0.0`; code này đã làm sẵn. 
+The state is stored in PostgreSQL, so all users see the same state. A public
+`/api/server-status` endpoint is polled by the frontend. Normal API operations
+return HTTP 503 while the server is not `normal`, while status/health and admin
+status controls remain available.
 
-### Environment Variables trên Render
 
-Thêm:
+## Verification
 
-`DATABASE_URL` = PostgreSQL connection string lấy từ Supabase
-
-`ADMIN_PASSWORD` = `Hoang@123456`
-
-`ALLOWED_ORIGIN` = `https://ht3051757-sudo.github.io`
-
-Sau khi lưu biến môi trường, Render deploy lại service. Không đưa `DATABASE_URL` hoặc mật khẩu Admin vào file JavaScript frontend. Render hỗ trợ lưu secret bằng Environment Variables. 
-
-Sau deploy bạn sẽ có URL kiểu:
-
-`https://ten-service-cua-ban.onrender.com`
-
-Test:
-
-`https://ten-service-cua-ban.onrender.com/api/health`
-
-Nếu trả JSON có `"ok":true` là backend chạy.
-
-## 3) Nối GitHub Pages với backend
-
-Mở `app.js`, dòng đầu có:
-
-`const API_URL=(window.UG_API_URL||"https://YOUR-UGPHONE-BACKEND.onrender.com/api")...`
-
-Thay `https://YOUR-UGPHONE-BACKEND.onrender.com/api` bằng URL Render thật của bạn, ví dụ:
-
-`https://ugphone-mod-backend.onrender.com/api`
-
-Sau đó upload/commit các file frontend vào repo GitHub Pages.
-
-## 4) Kiểm tra
-
-1. Máy A đăng ký tài khoản.
-2. Admin đăng nhập.
-3. Admin thêm KEY.
-4. Máy B mở lại trang → KEY đó được đọc từ database chung.
-5. Máy A/B đăng nhập tài khoản khác nhau → vẫn dùng chung danh sách KEY.
-6. Chat cũng là chat chung.
-7. BAN user/IP được lưu server.
-
-## Lưu ý quan trọng
-
-GitHub Pages một mình **không thể** làm phần database/server. Bản cũ dùng `localStorage`, nên mỗi máy có dữ liệu riêng. Bản này đã tách backend để giải quyết đúng vấn đề đó.
-
-Mật khẩu Admin hiện được đọc từ biến `ADMIN_PASSWORD` trên Render, không hardcode trong `app.js`. Hãy giữ `DATABASE_URL` và các secret trong Environment Variables, không commit chúng vào GitHub.
+Đã kiểm tra tĩnh source và syntax Node.js cho các phần đăng ký, đăng nhập, WebSocket/global chat, admin, maintenance. Runtime PostgreSQL/Render cần kiểm tra sau khi deploy vì ZIP không chứa server/database đang chạy.

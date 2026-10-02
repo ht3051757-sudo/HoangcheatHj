@@ -3,6 +3,8 @@ const cors=require("cors");
 const bcrypt=require("bcryptjs");
 const crypto=require("crypto");
 const postgres=require("postgres");
+const http=require("http");
+const {WebSocketServer}=require("ws");
 
 const app=express();
 app.set("trust proxy",true);
@@ -21,6 +23,7 @@ function todayVN(){return new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Ho_Chi
 function token(){return crypto.randomBytes(32).toString("hex")}
 function fail(res,code,msg){return res.status(code).json({error:msg})}
 async function init(){
+ await sql`create extension if not exists pgcrypto`;
  await sql`create table if not exists users(
   id uuid primary key default gen_random_uuid(), username text unique not null, password_hash text not null,
   banned boolean not null default false, ip text, avatar text not null default '', created_at timestamptz not null default now(), last_seen timestamptz not null default now())`;
@@ -34,6 +37,9 @@ async function init(){
  await sql`create table if not exists sessions(
   token text primary key, user_id uuid references users(id) on delete cascade, is_admin boolean not null default false,
   expires_at timestamptz not null)`;
+ await sql`alter table sessions add column if not exists user_id uuid references users(id) on delete cascade`;
+ await sql`alter table sessions add column if not exists is_admin boolean not null default false`;
+ await sql`alter table sessions add column if not exists expires_at timestamptz not null default now()`;
  await sql`create index if not exists messages_created_idx on messages(created_at desc)`;
 }
 
@@ -42,7 +48,7 @@ async function auth(req,res,next){
  const rows=await sql`select s.token,s.is_admin,s.user_id,u.username,u.banned,u.avatar,u.ip from sessions s left join users u on u.id=s.user_id where s.token=${t} and s.expires_at>now() limit 1`;
  if(!rows.length)return fail(res,401,"Phiên đăng nhập hết hạn.");
  req.session=rows[0];if(!rows[0].is_admin&&rows[0].banned)return fail(res,403,"Tài khoản đã bị BAN.");
- if(!rows[0].is_admin&&await sql`select 1 from banned_ips where ip=${rows[0].ip} limit 1`.then(r=>r.length))return fail(res,403,"Thiết bị đã bị BAN IP.");
+ if(!rows[0].is_admin&&req.headers["x-forwarded-for"] && await sql`select 1 from banned_ips where ip=${ip(req)} limit 1`.then(r=>r.length))return fail(res,403,"IP hiện tại đã bị BAN.");
  next();
 }
 async function adminAuth(req,res,next){
@@ -51,7 +57,76 @@ async function adminAuth(req,res,next){
  if(!rows.length)return fail(res,401,"Phiên Admin hết hạn.");req.adminToken=t;next();
 }
 
-app.get("/api/health",(req,res)=>res.json({ok:true,service:"UGPHONE MOD shared backend",time:Date.now()}));
+// Serve the bundled frontend when the whole project is deployed to Render.
+// This makes the default frontend API path "/api" work without CORS configuration.
+app.use(express.static(__dirname, {index:"index.html"}));
+
+app.use(async(req,res,next)=>{
+  if(!req.path.startsWith("/api/") || req.path==="/api/health" || req.path==="/api/server-status" || req.path.startsWith("/api/admin/")) return next();
+  try{
+    const state=await getServerState();
+    if(state.status!=="normal"){
+      return res.status(503).json({
+        ok:false,
+        code:"SERVER_"+state.status.toUpperCase(),
+        status:state.status,
+        message:maintenanceMessage(state.status)
+      });
+    }
+    next();
+  }catch(e){ next(); }
+});
+
+
+
+// Server status: normal | maintenance | resetting | resting
+// Persisted in PostgreSQL so every client sees the same state.
+async function ensureServerState(){
+  await sql`create table if not exists server_state(
+    id integer primary key default 1,
+    status text not null default 'normal',
+    message text,
+    updated_at timestamptz not null default now()
+  )`;
+  await sql`insert into server_state(id,status,message)
+    values(1,'normal','')
+    on conflict (id) do nothing`;
+}
+async function getServerState(){
+  const r=await sql`select status,message,updated_at from server_state where id=1`;
+  return r[0] || {status:"normal",message:""};
+}
+function maintenanceMessage(status){
+  if(status==="maintenance") return "Server đang được bảo trì 🔩";
+  if(status==="resetting") return "Server đang reset, vui lòng quay lại sau.";
+  if(status==="resting") return "Server đang nghỉ.";
+  return "";
+}
+
+
+function requireAdmin(req,res,next){
+  if(req.session?.is_admin) return next();
+  return res.status(403).json({ok:false,error:"Admin only"});
+}
+
+app.get("/api/health",async(req,res)=>{
+  try{
+    await sql`select 1`;
+    res.json({ok:true,service:"UGPHONE MOD shared backend",database:"ok",time:Date.now()});
+  }catch(e){
+    console.error("Health DB check failed",e);
+    res.status(503).json({ok:false,service:"UGPHONE MOD shared backend",database:"error",error:"Database chưa kết nối."});
+  }
+});
+app.get("/api/server-status",async(req,res)=>{
+  try{
+    const state=await getServerState();
+    res.json({ok:true,...state,display:maintenanceMessage(state.status)});
+  }catch(e){
+    console.error("server-status failed",e);
+    res.status(503).json({ok:false,status:"maintenance",display:"Server đang được bảo trì 🔩"});
+  }
+});
 
 app.post("/api/register",async(req,res)=>{
  try{const username=String(req.body.username||"").trim(),password=String(req.body.password||"");
@@ -61,10 +136,10 @@ app.post("/api/register",async(req,res)=>{
  const hash=await bcrypt.hash(password,12),rows=await sql`insert into users(username,password_hash,ip) values(${username},${hash},${ip(req)}) returning id,username,banned,avatar,ip`;
  const t=token();await sql`insert into sessions(token,user_id,is_admin,expires_at) values(${t},${rows[0].id},false,now()+${SESSION_DAYS+" days"}::interval)`;
  res.json({token:t,user:rows[0]});
- }catch(e){console.error(e);fail(res,500,"Lỗi máy chủ khi tạo tài khoản.")}});
+ }catch(e){console.error(e);if(e&&e.code==="23505")return fail(res,409,"Tài khoản đã tồn tại.");fail(res,500,"Lỗi máy chủ khi tạo tài khoản.")}});
 
 app.post("/api/login",async(req,res)=>{
- try{const username=String(req.body.username||"").trim(),password=String(req.body.password||"");const rows=await sql`select * from users where lower(username)=lower(${username}) limit 1`;
+ try{const username=String(req.body.username||"").trim(),password=String(req.body.password||"");if(!username||!password)return fail(res,400,"Vui lòng nhập tài khoản và mật khẩu.");if(!/^[A-Za-z0-9_.-]{3,32}$/.test(username))return fail(res,400,"Tên tài khoản không hợp lệ.");const rows=await sql`select * from users where lower(username)=lower(${username}) limit 1`;
  if(!rows.length||!(await bcrypt.compare(password,rows[0].password_hash)))return fail(res,401,"Sai tài khoản hoặc mật khẩu.");
  const u=rows[0];if(u.banned)return fail(res,403,"Tài khoản đã bị BAN.");if((await sql`select 1 from banned_ips where ip=${ip(req)} limit 1`).length)return fail(res,403,"Thiết bị đã bị BAN IP.");
  await sql`update users set ip=${ip(req)},last_seen=now() where id=${u.id}`;const t=token();await sql`insert into sessions(token,user_id,expires_at) values(${t},${u.id},now()+${SESSION_DAYS+" days"}::interval)`;
@@ -98,4 +173,54 @@ app.post("/api/admin/ips/ban",adminAuth,async(req,res)=>{const x=String(req.body
 app.post("/api/admin/ips/unban",adminAuth,async(req,res)=>{const x=String(req.body.ip||"").trim();await sql`delete from banned_ips where ip=${x}`;res.json({ok:true})});
 
 app.use((err,req,res,next)=>{console.error(err);if(err.message==="Origin not allowed")return res.status(403).json({error:"Origin không được phép. Kiểm tra ALLOWED_ORIGIN trên Render."});res.status(500).json({error:"Lỗi máy chủ."})});
-init().then(()=>app.listen(PORT,"0.0.0.0",()=>console.log("UGPHONE MOD backend listening on "+PORT))).catch(e=>{console.error("DB init failed",e);process.exit(1)});
+const server=http.createServer(app);
+const wss=new WebSocketServer({noServer:true});
+const sockets=new Set();
+
+function broadcastGlobal(payload){
+ const data=JSON.stringify(payload);
+ for(const ws of sockets){if(ws.readyState===1){try{ws.send(data)}catch{}}}
+}
+
+wss.on("connection",ws=>{
+ sockets.add(ws);
+ ws.send(JSON.stringify({type:"ready",online:sockets.size}));
+ ws.on("close",()=>sockets.delete(ws));
+ ws.on("error",()=>sockets.delete(ws));
+});
+
+server.on("upgrade",(req,socket,head)=>{
+ if(req.url!=="/ws") return socket.destroy();
+ wss.handleUpgrade(req,socket,head,ws=>wss.emit("connection",ws,req));
+});
+
+// Admin-only global announcement. The message is persisted first, then broadcast
+// to every connected browser (including users who are not on the chat page).
+app.post("/api/admin/broadcast",adminAuth,async(req,res)=>{
+ try{
+  const message=String(req.body.message||"").trim();
+  if(!message)return fail(res,400,"Tin nhắn trống.");
+  if(message.length>500)return fail(res,400,"Tin nhắn tối đa 500 ký tự.");
+  const r=await sql`insert into messages(user_id,username,avatar,message) values(null,'Admin','',${message}) returning id,username,avatar,message,created_at`;
+  const item=r[0];
+  await sql`delete from messages where id not in (select id from messages order by id desc limit 500)`;
+  broadcastGlobal({type:"global_message",message:item});
+  res.json({message:item,recipients:sockets.size});
+ }catch(e){console.error(e);fail(res,500,"Không thể gửi thông báo toàn hệ thống.")}
+});
+
+init().then(()=>server.listen(PORT,"0.0.0.0",()=>console.log("UGPHONE MOD backend listening on "+PORT))).catch(e=>{console.error("DB init failed",e);process.exit(1)});
+
+app.post("/api/admin/server-status", requireAdmin, async(req,res)=>{
+  const allowed=["normal","maintenance","resetting","resting"];
+  const status=String(req.body?.status||"").toLowerCase();
+  if(!allowed.includes(status)) return res.status(400).json({ok:false,error:"Trạng thái không hợp lệ."});
+  const msg=maintenanceMessage(status);
+  await sql`update server_state set status=${status}, message=${msg}, updated_at=now() where id=1`;
+  // Notify connected clients if websocket broadcast helper exists.
+  if(typeof broadcast==="function") broadcast({type:"server_status",status,message:msg});
+  res.json({ok:true,status,message:msg});
+});
+
+
+ensureServerState().then(()=>console.log("Server ready")).catch(console.error);
