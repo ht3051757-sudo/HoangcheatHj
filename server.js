@@ -97,5 +97,5 @@ app.patch("/api/admin/users/:id/ban",adminAuth,async(req,res)=>{const r=await sq
 app.post("/api/admin/ips/ban",adminAuth,async(req,res)=>{const x=String(req.body.ip||"").trim();if(!x)return fail(res,400,"Thiếu IP.");await sql`insert into banned_ips(ip) values(${x}) on conflict do nothing`;res.json({ok:true})});
 app.post("/api/admin/ips/unban",adminAuth,async(req,res)=>{const x=String(req.body.ip||"").trim();await sql`delete from banned_ips where ip=${x}`;res.json({ok:true})});
 
-app.use((err,req,res,next)=>{console.error(err);res.status(500).json({error:"Lỗi máy chủ."})});
+app.use((err,req,res,next)=>{console.error(err);if(err.message==="Origin not allowed")return res.status(403).json({error:"Origin không được phép. Kiểm tra ALLOWED_ORIGIN trên Render."});res.status(500).json({error:"Lỗi máy chủ."})});
 init().then(()=>app.listen(PORT,"0.0.0.0",()=>console.log("UGPHONE MOD backend listening on "+PORT))).catch(e=>{console.error("DB init failed",e);process.exit(1)});
