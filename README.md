@@ -1,73 +1,33 @@
-# UGPHONE MOD — Auth + Global Broadcast
+# UGPHONE MOD — GitHub Pages + Supabase (shared)
 
-## Deploy chắc chắn nhất
+Bản này KHÔNG dùng Render/Node server. GitHub Pages chỉ phục vụ giao diện; Supabase là database + Auth + Realtime.
 
-### Cách 1: Deploy toàn bộ thư mục `ug/` lên Render
-- Build/Install: `npm install`
-- Start: `npm start`
-- Environment:
-  - `DATABASE_URL` = PostgreSQL connection string
-  - `ADMIN_PASSWORD` = mật khẩu admin
-  - `ALLOWED_ORIGIN` có thể để trống khi frontend và backend cùng domain
-- Sau khi chạy, mở chính URL Render. Frontend sẽ tự dùng `/api`.
+## 1) Tạo Supabase
+1. Tạo project trên Supabase.
+2. Vào SQL Editor và chạy toàn bộ `supabase_schema.sql`.
+3. Vào Authentication → Providers → Email. Nếu muốn đăng ký dùng ngay không cần xác nhận, tắt Confirm email; nếu để bật thì người dùng phải xác nhận email.
+4. Vào Project Settings → API, lấy Project URL và anon/public key.
+5. Mở `config.js` và điền:
+   - `UG_SUPABASE_URL`
+   - `UG_SUPABASE_ANON_KEY`
 
-### Cách 2: GitHub Pages frontend + Render backend
-Trong `config.js` đặt:
-`window.UG_API_URL = "https://TEN-SERVICE.onrender.com/api";`
-Và Render đặt:
-`ALLOWED_ORIGIN=https://TEN-USERNAME.github.io`
+## 2) Tạo Admin
+- Đăng ký một tài khoản bình thường bằng email/mật khẩu trên web.
+- Trong Supabase SQL Editor chạy:
+  `update public.profiles set role='admin' where username='TEN_ADMIN';`
+- Sau đó vào mục ADMIN và đăng nhập bằng email + mật khẩu của tài khoản đó.
 
-## Kiểm tra
-Mở `/api/health`. Kết quả thành công phải có:
-`{"ok":true,"database":"ok",...}`
+## 3) Đưa lên GitHub Pages
+Chỉ cần upload `index.html`, `style.css`, `app.js`, `config.js` và `supabase_schema.sql` lên repo/branch dùng GitHub Pages. `server.js`, `package.json`, `.env.example` không còn cần thiết.
 
-Đăng ký tạo tài khoản và đăng nhập dùng bcrypt + PostgreSQL.
-Ban tài khoản theo user ID không tự ban tài khoản khác; ban IP là cơ chế riêng.
-Admin broadcast được lưu vào `messages` và phát realtime qua WebSocket `/ws`.
+## 4) Dữ liệu dùng chung
+- Chat: insert vào `messages`, Supabase Realtime phát tới mọi máy.
+- KEY: lưu trong `keys`, Admin thêm/tắt KEY thì mọi máy đọc cùng database.
+- BAN: lưu trong `profiles.banned`; client đang đăng nhập bị BAN sẽ nhận realtime và đăng xuất.
+- Server ON/OFF: lưu trong `server_state`, mọi máy nhận thay đổi realtime.
+- Tài khoản: Supabase Auth + `profiles`.
 
-
-## Server maintenance controls
-
-Admin panel can set:
-- `🔩 Đóng server` → `maintenance`
-- `♻️ Đang reset server` → `resetting`
-- `🌙 Server đang nghỉ` → `resting`
-- `▶️ Mở server` → `normal`
-
-The state is stored in PostgreSQL, so all users see the same state. A public
-`/api/server-status` endpoint is polled by the frontend. Normal API operations
-return HTTP 503 while the server is not `normal`, while status/health and admin
-status controls remain available.
-
-
-## Verification
-
-Đã kiểm tra tĩnh source và syntax Node.js cho các phần đăng ký, đăng nhập, WebSocket/global chat, admin, maintenance. Runtime PostgreSQL/Render cần kiểm tra sau khi deploy vì ZIP không chứa server/database đang chạy.
-
-
-## Final deployment check
-
-**Nếu dùng GitHub Pages cho frontend:** `config.js` phải chứa URL Render thật, ví dụ:
-`window.UG_API_URL = "https://TEN-SERVICE.onrender.com/api";`
-
-**Nếu deploy cả thư mục `ug/` lên Render:** để `window.UG_API_URL = "/api"`.
-
-Mọi API response không phải JSON giờ sẽ báo lỗi cấu hình API rõ ràng thay vì `Unexpected token '<'`.
-Mỗi tài khoản chỉ nhận một KEY trong một ngày VN; KEY của ngày đó được lưu trong `key_claims`.
-
-
-## Admin key
-Set `ADMIN_KEY` in the Render Environment Variables. The key is intentionally not embedded in frontend source. Use the value you choose in your private server environment.
-
-
-### GitHub Pages fix
-Khi mở frontend trên GitHub Pages, app tự hiện hộp **Kết nối Backend** nếu chưa có URL Render. Nhập `https://TEN-SERVICE.onrender.com/api` một lần. URL được lưu trong localStorage.
-Giới hạn đăng ký: tối đa 150 tài khoản.
-Admin login chấp nhận `ADMIN_PASSWORD` hoặc `ADMIN_KEY` trên Render.
-
-
-## Single-origin deployment
-
-Bản này không dùng GitHub Pages làm frontend riêng. Node/Express phục vụ luôn `index.html`, CSS, JS và `/api` trên cùng một origin, nên không có popup nhập URL Render và không cần `UG_API_URL` trỏ sang domain khác.
-
-Deploy toàn bộ thư mục `ug` lên một Node host (Render/Railway/VPS/etc.), đặt `DATABASE_URL`, `ADMIN_KEY` và các biến môi trường cần thiết, rồi mở chính URL của service đó.
+## Lưu ý bảo mật
+- Chỉ đưa **anon/public key** vào `config.js`. Không đưa `service_role` key vào GitHub.
+- Quyền Admin được kiểm tra bằng `role` trong database/RLS; không đặt mật khẩu Admin trong JavaScript.
+- Bản GitHub Pages này không thể tự chạy nếu chưa điền Supabase URL/key và chưa chạy SQL schema.
