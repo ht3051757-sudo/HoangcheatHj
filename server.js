@@ -136,15 +136,26 @@ app.get("/api/server-status",async(req,res)=>{
 });
 
 app.post("/api/register",async(req,res)=>{
- try{const username=String(req.body.username||"").trim(),password=String(req.body.password||"");
- if(!/^[A-Za-z0-9_.-]{3,32}$/.test(username))return fail(res,400,"Tên tài khoản 3-32 ký tự, chỉ chữ, số, _, -, .");
- if(password.length<6)return fail(res,400,"Mật khẩu phải có ít nhất 6 ký tự.");
- const exists=await sql`select 1 from users where lower(username)=lower(${username}) limit 1`;if(exists.length)return fail(res,409,"Tài khoản đã tồn tại.");
- const hash=await bcrypt.hash(password,12),rows=await sql`insert into users(username,password_hash,ip) values(${username},${hash},${ip(req)}) returning id,username,banned,avatar,ip`;
- const t=token();await sql`insert into sessions(token,user_id,is_admin,expires_at) values(${t},${rows[0].id},false,now()+${SESSION_DAYS+" days"}::interval)`;
- res.json({token:t,user:rows[0]});
- }catch(e){console.error(e);if(e&&e.code==="23505")return fail(res,409,"Tài khoản đã tồn tại.");fail(res,500,"Lỗi máy chủ khi tạo tài khoản.")}});
-
+ try{
+  const username=String(req.body.username||"").trim(),password=String(req.body.password||"");
+  if(!/^[A-Za-z0-9_.-]{3,32}$/.test(username))return fail(res,400,"Tên tài khoản 3-32 ký tự, chỉ chữ, số, _, -, .");
+  if(password.length<6)return fail(res,400,"Mật khẩu phải có ít nhất 6 ký tự.");
+  const result=await sql.begin(async tx=>{
+    const count=await tx`select count(*)::int n from users`;
+    if(count[0].n>=150) throw Object.assign(new Error("Hệ thống đã đủ 150 tài khoản."),{status:409});
+    const hash=await bcrypt.hash(password,12);
+    const ipaddr=ip(req);
+    const r=await tx`insert into users(username,password_hash,ip) values(${username},${hash},${ipaddr}) returning id,username,avatar,banned`;
+    const t=token();
+    await tx`insert into sessions(token,user_id,expires_at) values(${t},${r[0].id},now()+interval '30 days')`;
+    return {token:t,user:r[0]};
+  });
+  res.json(result);
+ }catch(e){
+  if(e.code==="23505")return fail(res,409,"Tên tài khoản đã tồn tại.");
+  fail(res,e.status||500,e.status?e.message:"Không thể tạo tài khoản.");
+ }
+});
 app.post("/api/login",async(req,res)=>{
  try{const username=String(req.body.username||"").trim(),password=String(req.body.password||"");if(!username||!password)return fail(res,400,"Vui lòng nhập tài khoản và mật khẩu.");if(!/^[A-Za-z0-9_.-]{3,32}$/.test(username))return fail(res,400,"Tên tài khoản không hợp lệ.");const rows=await sql`select * from users where lower(username)=lower(${username}) limit 1`;
  if(!rows.length||!(await bcrypt.compare(password,rows[0].password_hash)))return fail(res,401,"Sai tài khoản hoặc mật khẩu.");
@@ -176,7 +187,11 @@ app.get("/api/chat",auth,async(req,res)=>{const rows=await sql`select id,usernam
 app.post("/api/chat",auth,async(req,res)=>{const message=String(req.body.message||"").trim();if(!message)return fail(res,400,"Tin nhắn trống.");if(message.length>500)return fail(res,400,"Tin nhắn tối đa 500 ký tự.");const r=await sql`insert into messages(user_id,username,avatar,message) values(${req.session.user_id},${req.session.username},${req.session.avatar||""},${message}) returning id,username,avatar,message,created_at`;await sql`delete from messages where id not in (select id from messages order by id desc limit 500)`;res.json({message:r[0]})});
 app.post("/api/profile/avatar",auth,async(req,res)=>{const avatar=String(req.body.avatar||"");if(avatar.length>700000)return fail(res,400,"Ảnh quá lớn.");if(avatar&&!/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(avatar))return fail(res,400,"Ảnh không hợp lệ.");const r=await sql`update users set avatar=${avatar} where id=${req.session.user_id} returning id,username,banned,avatar,ip`;res.json({user:r[0]})});
 
-app.post("/api/admin/login",async(req,res)=>{if(!ADMIN_PASSWORD)return fail(res,503,"Admin chưa được cấu hình ADMIN_PASSWORD trên server.");if(String(req.body.password||"")!==ADMIN_PASSWORD)return fail(res,401,"Sai mật khẩu Admin.");const t=token();await sql`insert into sessions(token,is_admin,expires_at) values(${t},true,now()+${SESSION_DAYS+" days"}::interval)`;res.json({token:t})});
+app.post("/api/admin/login",async(req,res)=>{
+ const supplied=String(req.body.password||"");
+ const valid=(ADMIN_PASSWORD && supplied===ADMIN_PASSWORD)||(ADMIN_KEY && supplied===ADMIN_KEY);
+ if(!valid)return fail(res,401,"Sai mật khẩu/key Admin.");
+const t=token();await sql`insert into sessions(token,is_admin,expires_at) values(${t},true,now()+${SESSION_DAYS+" days"}::interval)`;res.json({token:t})});
 app.post("/api/admin/logout",adminAuth,async(req,res)=>{await sql`delete from sessions where token=${req.adminToken}`;res.json({ok:true})});
 app.get("/api/admin/state",adminAuth,async(req,res)=>{
  const users=await sql`select id,username,banned,ip,avatar,created_at,last_seen from users order by created_at desc`;

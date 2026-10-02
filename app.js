@@ -1,5 +1,14 @@
 /* UGPHONE MOD - shared online frontend */
-const API_URL=(window.UG_API_URL||localStorage.getItem("ug_api_url")||"/api").replace(/\/$/,"");
+let API_URL=(window.UG_API_URL||localStorage.getItem("ug_api_url")||"").replace(/\/$/,"");
+function ensureApiUrl(){
+ if(API_URL)return true;
+ const entered=prompt("Nhập URL API Render, ví dụ https://ten-service.onrender.com/api");
+ if(!entered)return false;
+ API_URL=entered.trim().replace(/\/$/,"");
+ localStorage.setItem("ug_api_url",API_URL);
+ window.UG_API_URL=API_URL;
+ return true;
+}
 async function fetchJSON(url,opts={}){
  try{
   const r=await fetch(url,opts);
