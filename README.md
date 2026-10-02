@@ -58,3 +58,9 @@ Mỗi tài khoản chỉ nhận một KEY trong một ngày VN; KEY của ngày 
 
 ## Admin key
 Set `ADMIN_KEY` in the Render Environment Variables. The key is intentionally not embedded in frontend source. Use the value you choose in your private server environment.
+
+
+### GitHub Pages fix
+Khi mở frontend trên GitHub Pages, app tự hiện hộp **Kết nối Backend** nếu chưa có URL Render. Nhập `https://TEN-SERVICE.onrender.com/api` một lần. URL được lưu trong localStorage.
+Giới hạn đăng ký: tối đa 150 tài khoản.
+Admin login chấp nhận `ADMIN_PASSWORD` hoặc `ADMIN_KEY` trên Render.
