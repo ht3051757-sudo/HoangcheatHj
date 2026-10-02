@@ -43,3 +43,18 @@ status controls remain available.
 ## Verification
 
 Đã kiểm tra tĩnh source và syntax Node.js cho các phần đăng ký, đăng nhập, WebSocket/global chat, admin, maintenance. Runtime PostgreSQL/Render cần kiểm tra sau khi deploy vì ZIP không chứa server/database đang chạy.
+
+
+## Final deployment check
+
+**Nếu dùng GitHub Pages cho frontend:** `config.js` phải chứa URL Render thật, ví dụ:
+`window.UG_API_URL = "https://TEN-SERVICE.onrender.com/api";`
+
+**Nếu deploy cả thư mục `ug/` lên Render:** để `window.UG_API_URL = "/api"`.
+
+Mọi API response không phải JSON giờ sẽ báo lỗi cấu hình API rõ ràng thay vì `Unexpected token '<'`.
+Mỗi tài khoản chỉ nhận một KEY trong một ngày VN; KEY của ngày đó được lưu trong `key_claims`.
+
+
+## Admin key
+Set `ADMIN_KEY` in the Render Environment Variables. The key is intentionally not embedded in frontend source. Use the value you choose in your private server environment.

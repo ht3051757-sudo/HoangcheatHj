@@ -1,6 +1,19 @@
 /* UGPHONE MOD - shared online frontend */
 const API_URL=(window.UG_API_URL||localStorage.getItem("ug_api_url")||"/api").replace(/\/$/,"");
-async function fetchJSON(url,opts={}){try{return await fetch(url,opts)}catch(e){throw new Error(`Không kết nối được API (${API_URL}). Nếu frontend ở GitHub Pages, hãy đặt window.UG_API_URL trong config.js thành URL Render + /api.`)}}
+async function fetchJSON(url,opts={}){
+ try{
+  const r=await fetch(url,opts);
+  const type=r.headers.get("content-type")||"";
+  if(!type.includes("application/json")){
+   const text=await r.text();
+   if(/<html|<!doctype/i.test(text)) throw new Error("API đang trả về trang HTML. Hãy cấu hình đúng URL backend Render trong config.js.");
+   throw new Error(`API không trả về JSON (HTTP ${r.status}).`);
+  }
+  return r;
+ }catch(e){
+  if(e instanceof Error && e.message.startsWith("API ")) throw e;
+  throw new Error(`Không kết nối được API (${API_URL}). Kiểm tra backend Render và URL /api.`);
+ }}
 const $=id=>document.getElementById(id);
 let token=localStorage.getItem("ug_token")||"";
 let me=null,adminToken=localStorage.getItem("ug_admin_token")||"";
@@ -50,9 +63,22 @@ function adminBroadcastSend(){
 async function loadChat(){try{const d=await api("/chat");const box=$("chatMessages");box.innerHTML="";d.messages.forEach(renderChatMessage);connectChatWS()}catch(e){toast(e.message)}}
 async function sendChat(){const input=$("chatInput"),text=(input?.value||"").trim();if(!me)return toast("Đăng nhập để chat.");if(!text)return;if(text.length>500)return toast("Tin nhắn tối đa 500 ký tự.");try{await api("/chat",{method:"POST",body:JSON.stringify({message:text})});input.value="";loadChat()}catch(e){toast(e.message)}}
 async function refreshStats(){try{const d=await api("/stats");$("onlineCount").textContent=d.online;const s=$("stats");if(s)s.textContent=`Tài khoản: ${d.users} • Online: ${d.online} • KEY: ${d.keys}`}catch{}}
-async function adminLogin(){const p=$("adminPass")?.value||"";try{const d=await fetchJSON(API_URL+"/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:p})});const j=await d.json();if(!d.ok)throw new Error(j.error||"Sai mật khẩu Admin.");adminToken=j.token;localStorage.setItem("ug_admin_token",adminToken);toast("Đăng nhập Admin thành công");loadAdmin()}catch(e){toast(e.message)}}
+async function adminLogin(){
+ const p=$("adminPass")?.value||"";
+ if(!p)return toast("Nhập mật khẩu Admin.");
+ try{
+  const r=await fetchJSON(API_URL+"/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:p})});
+  const j=await r.json();
+  if(!r.ok)throw new Error(j.error||"Sai mật khẩu Admin.");
+  adminToken=j.token;
+  localStorage.setItem("ug_admin_token",adminToken);
+  toast("Đăng nhập Admin thành công");
+  loadAdmin();
+ }catch(e){toast(e.message)}
+}
 async function adminLogout(){try{await adminApi("/admin/logout",{method:"POST"})}catch{}adminToken="";localStorage.removeItem("ug_admin_token");loadAdmin()}
-async function loadAdmin(){const loginBox=$("adminLogin"),panel=$("adminPanel");if(!loginBox||!panel)return;if(!adminToken){loginBox.classList.remove("hidden");panel.classList.add("hidden");return}try{const d=await adminApi("/admin/state");loginBox.classList.add("hidden");panel.classList.remove("hidden");$("statUsers").textContent=d.stats.users;$("statOnline").textContent=d.stats.online;$("statBanned").textContent=d.stats.banned;$("statKeys").textContent=d.stats.keys;renderKeys(d.keys);renderUsers(d.users);$("adminChat").innerHTML=d.messages.map(m=>`<div class="chatMsg">${m.avatar?`<img class="avatar" src="${esc(m.avatar)}">`:""}<div><b>${esc(m.username)}</b>: ${esc(m.message)}</div></div>`).join("")}catch(e){adminToken="";localStorage.removeItem("ug_admin_token");loginBox.classList.remove("hidden");panel.classList.add("hidden");toast(e.message)}}
+async function loadAdmin(){
+ checkApiStatus();const loginBox=$("adminLogin"),panel=$("adminPanel");if(!loginBox||!panel)return;if(!adminToken){loginBox.classList.remove("hidden");panel.classList.add("hidden");return}try{const d=await adminApi("/admin/state");loginBox.classList.add("hidden");panel.classList.remove("hidden");$("statUsers").textContent=d.stats.users;$("statOnline").textContent=d.stats.online;$("statBanned").textContent=d.stats.banned;$("statKeys").textContent=d.stats.keys;renderKeys(d.keys);renderUsers(d.users);$("adminChat").innerHTML=d.messages.map(m=>`<div class="chatMsg">${m.avatar?`<img class="avatar" src="${esc(m.avatar)}">`:""}<div><b>${esc(m.username)}</b>: ${esc(m.message)}</div></div>`).join("")}catch(e){adminToken="";localStorage.removeItem("ug_admin_token");loginBox.classList.remove("hidden");panel.classList.add("hidden");toast(e.message)}}
 function renderKeys(keys){$("keyList").innerHTML=keys.map(k=>`<div class="keyitem"><span>${esc(k.date)} — <b>${esc(k.key)}</b> — ${k.used}/${k.limit} — ${k.active?"BẬT":"TẮT"}</span><button onclick="toggleKey('${esc(k.id)}')">${k.active?"TẮT":"BẬT"}</button></div>`).join("")}
 function renderUsers(users){$("users").innerHTML=users.map(u=>`<div class="user ${u.banned?"ban":""}"><span><b>${esc(u.username)}</b> — ${u.banned?"BAN":"OK"} — IP: ${esc(u.ip||"")}</span><div class="adminBtns"><button onclick="banUser('${esc(u.id)}')">${u.banned?"GỠ BAN":"BAN"}</button><button class="ipban" onclick="banIP('${encodeURIComponent(u.ip||"")}')">BAN IP</button></div></div>`).join("")}
 async function addKey(){const key=$("newKey")?.value.trim(),date=$("keyDate")?.value,limit=Number($("keyLimit")?.value||999999);if(!key)return toast("Nhập KEY.");try{await adminApi("/admin/keys",{method:"POST",body:JSON.stringify({key,date,limit})});$("newKey").value="";loadAdmin();toast("Đã thêm KEY — tất cả máy sẽ thấy")}catch(e){toast(e.message)}}
@@ -126,3 +152,12 @@ $("keyDate").value=new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Ho_Chi_
   document.addEventListener("DOMContentLoaded",addAdminServerControls);
   setTimeout(addAdminServerControls,1500);
 })();
+
+async function checkApiStatus(){
+ const el=$("apiStatus"); if(!el)return;
+ try{
+  const r=await fetchJSON(API_URL+"/health",{cache:"no-store"});
+  const d=await r.json();
+  el.textContent=d.ok&&d.database==="ok"?"API + Database: OK":"API: đang có lỗi";
+ }catch(e){el.textContent="API: "+e.message}
+}

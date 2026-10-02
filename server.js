@@ -15,7 +15,8 @@ app.use(cors({origin:(origin,cb)=>{if(!origin||allowed.includes("*")||allowed.in
 const sql=postgres(process.env.DATABASE_URL||"",{prepare:false,max:5});
 const PORT=Number(process.env.PORT||10000);
 const SESSION_DAYS=30;
-const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD||"";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+const ADMIN_KEY = process.env.ADMIN_KEY || "";
 
 function now(){return new Date()}
 function ip(req){return String(req.ip||req.headers["x-forwarded-for"]||req.socket.remoteAddress||"unknown").split(",")[0].trim().replace(/^::ffff:/,"")}
@@ -30,6 +31,12 @@ async function init(){
  await sql`create table if not exists keys(
   id uuid primary key default gen_random_uuid(), key text not null, date date not null, limit_count integer not null default 999999,
   used integer not null default 0, active boolean not null default true, created_at timestamptz not null default now())`;
+ await sql`create table if not exists key_claims(
+  user_id uuid references users(id) on delete cascade,
+  claim_date date not null,
+  key_id uuid references keys(id) on delete set null,
+  created_at timestamptz not null default now(),
+  primary key(user_id,claim_date))`;
  await sql`create table if not exists banned_ips(ip text primary key, created_at timestamptz not null default now())`;
  await sql`create table if not exists messages(
   id bigserial primary key, user_id uuid references users(id) on delete set null, username text not null, avatar text not null default '',
@@ -151,7 +158,19 @@ app.get("/api/me",auth,async(req,res)=>{await sql`update users set last_seen=now
 app.get("/api/stats",async(req,res)=>{const u=await sql`select count(*)::int n from users`;const o=await sql`select count(*)::int n from users where last_seen>now()-interval '90 seconds' and banned=false`;const k=await sql`select count(*)::int n from keys`;res.json({users:u[0].n,online:o[0].n,keys:k[0].n})});
 
 app.post("/api/keys/claim",auth,async(req,res)=>{
- try{await sql.begin(async tx=>{const d=todayVN();const rows=await tx`select * from keys where date=${d} and active=true and used<limit_count order by created_at asc limit 1 for update skip locked`;if(!rows.length)throw Object.assign(new Error("Hôm nay chưa có KEY."),{status:404});const k=rows[0];await tx`update keys set used=used+1 where id=${k.id}`;res.json({key:k.key,remaining:k.limit_count-k.used-1})})}catch(e){fail(res,e.status||500,e.status?e.message:"Lỗi máy chủ khi nhận KEY.")}});
+ try{
+  const d=todayVN();
+  await sql.begin(async tx=>{
+    const already=await tx`select k.key from key_claims c left join keys k on k.id=c.key_id where c.user_id=${req.session.user_id} and c.claim_date=${d} limit 1`;
+    if(already.length)return res.json({key:already[0].key,alreadyClaimed:true,remaining:null});
+    const rows=await tx`select * from keys where date=${d} and active=true and used<limit_count order by created_at asc limit 1 for update skip locked`;
+    if(!rows.length)throw Object.assign(new Error("Hôm nay chưa có KEY."),{status:404});
+    const k=rows[0];
+    await tx`update keys set used=used+1 where id=${k.id}`;
+    await tx`insert into key_claims(user_id,claim_date,key_id) values(${req.session.user_id},${d},${k.id})`;
+    res.json({key:k.key,alreadyClaimed:false,remaining:k.limit_count-k.used-1});
+  });
+ }catch(e){fail(res,e.status||500,e.status?e.message:"Lỗi máy chủ khi nhận KEY.")}});
 
 app.get("/api/chat",auth,async(req,res)=>{const rows=await sql`select id,username,avatar,message,created_at from messages order by created_at desc limit 100`;res.json({messages:rows.reverse()})});
 app.post("/api/chat",auth,async(req,res)=>{const message=String(req.body.message||"").trim();if(!message)return fail(res,400,"Tin nhắn trống.");if(message.length>500)return fail(res,400,"Tin nhắn tối đa 500 ký tự.");const r=await sql`insert into messages(user_id,username,avatar,message) values(${req.session.user_id},${req.session.username},${req.session.avatar||""},${message}) returning id,username,avatar,message,created_at`;await sql`delete from messages where id not in (select id from messages order by id desc limit 500)`;res.json({message:r[0]})});
@@ -224,3 +243,22 @@ app.post("/api/admin/server-status", requireAdmin, async(req,res)=>{
 
 
 ensureServerState().then(()=>console.log("Server ready")).catch(console.error);
+app.post("/api/admin/key-login", async (req,res)=>{
+  try{
+    const key=String(req.body?.key||"");
+    if(!ADMIN_KEY || key!==ADMIN_KEY) return res.status(401).json({ok:false,error:"Admin key không đúng."});
+    const token=require("crypto").randomBytes(32).toString("hex");
+    // Reuse the existing session model when available.
+    if(req.session) {
+      req.session.is_admin=true;
+      req.session.admin=true;
+      req.session.admin_token=token;
+    }
+    res.json({ok:true,token});
+  }catch(e){
+    console.error("admin key login",e);
+    res.status(500).json({ok:false,error:"Không thể đăng nhập Admin."});
+  }
+});
+
+
