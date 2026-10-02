@@ -30,7 +30,7 @@ Thêm:
 
 `DATABASE_URL` = PostgreSQL connection string lấy từ Supabase
 
-`ADMIN_PASSWORD` = `UGP!H0ANG#2026$MOD`
+`ADMIN_PASSWORD` = `Hoang@123456`
 
 `ALLOWED_ORIGIN` = `https://ht3051757-sudo.github.io`
 
